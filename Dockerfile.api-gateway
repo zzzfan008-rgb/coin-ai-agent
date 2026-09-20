@@ -1,0 +1,55 @@
+# syntax=docker/dockerfile:1
+# =============================================================================
+# Fashion AI Platform — API 网关镜像（Go 1.21）
+# -----------------------------------------------------------------------------
+# 构建上下文为仓库根目录（不是 api-gateway/ 目录）:
+#   docker build -f Dockerfile.api-gateway -t fashionai/api-gateway:latest .
+#
+# 多阶段构建:
+#   builder —— golang:1.21-alpine 编译静态二进制
+#   runtime —— alpine 精简运行镜像（非 root 用户运行）
+# =============================================================================
+
+# ----------------------------- builder 阶段 ----------------------------------
+FROM golang:1.21-alpine AS builder
+
+# git 用于部分依赖的 go mod download；ca-certificates 供 TLS 使用
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /build
+
+# 先只拷贝依赖清单，利用 Docker 层缓存（源码变更不会重新下载依赖）
+# go.* 同时匹配 go.mod / go.sum；go.sum 尚未生成时也不会导致 COPY 失败
+COPY api-gateway/go.* ./
+RUN go mod download
+
+# 拷贝全部源码并编译为静态链接二进制
+COPY api-gateway/ ./
+# CGO_ENABLED=0 纯静态，可直接放入 scratch/alpine；-s -w 去除调试信息减小体积
+RUN CGO_ENABLED=0 GOOS=linux go build \
+      -ldflags="-s -w" \
+      -o /out/server \
+      ./cmd/server
+
+# ----------------------------- runtime 阶段 ----------------------------------
+FROM alpine:3.19 AS runtime
+
+# ca-certificates: HTTPS 调用；tzdata: 时区；wget: 健康检查
+RUN apk add --no-cache ca-certificates tzdata wget \
+    && adduser -D -u 10001 appuser
+
+WORKDIR /app
+
+# 从 builder 拷贝编译产物
+COPY --from=builder /out/server /app/server
+
+USER appuser
+
+# 网关监听端口（与 PORT 环境变量默认值一致）
+EXPOSE 8080
+
+# 容器级健康检查（网关实现 /health 端点，见 T-004 规格）
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:8080/health || exit 1
+
+ENTRYPOINT ["/app/server"]

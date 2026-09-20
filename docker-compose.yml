@@ -1,0 +1,174 @@
+# =============================================================================
+# Fashion AI Platform — Phase 1A 本地基础设施
+# -----------------------------------------------------------------------------
+# 启动:  cp .env.example .env && docker compose up -d
+# 停止:  docker compose down              （保留数据）
+# 清空:  docker compose down -v           （删除所有持久化数据）
+#
+# 包含服务:
+#   postgres  PostgreSQL 16 + pgvector   主机端口 5432
+#   redis     Redis 7                    主机端口 6379
+#   minio     MinIO (S3 协议)            主机端口 9000(API) / 9001(控制台)
+#   qdrant    Qdrant 向量数据库          主机端口 6333
+#
+# 安全约束（见 SPEC.md）:
+#   - internal 网络标记 internal: true，无出公网网关，承载所有服务间东西向流量；
+#   - host-access 网络仅用于把端口发布到宿主机（本地开发 / 验收），
+#     生产环境可删除该网络及所有 ports 段，基础设施回归纯内网；
+#   - 仅 LLM API 出公网（Phase 1B 起仅 api-core 挂接 egress 网络）。
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16（pgvector 官方镜像，已内置 pgvector 扩展）
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: fashionai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fashion_ai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fashion_ai_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-fashion_ai}
+      TZ: Asia/Shanghai
+    ports:
+      # 宿主机端口:容器端口 —— 宿主机端口可用 POSTGRES_PORT 覆盖
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - internal
+      - host-access
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fashion_ai} -d ${POSTGRES_DB:-fashion_ai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Redis 7（开启 AOF 持久化）
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: fashionai-redis
+    restart: unless-stopped
+    # --appendonly yes 开启 AOF 持久化，数据落盘到 /data
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - internal
+      - host-access
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # MinIO（S3 兼容对象存储）
+  #   9000 = S3 API    9001 = Web 管理控制台
+  #   官方镜像已迁移至 quay.io（Docker Hub 上的 minio/minio 停止更新）
+  # ---------------------------------------------------------------------------
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: fashionai-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      TZ: Asia/Shanghai
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - internal
+      - host-access
+    healthcheck:
+      # mc 为 MinIO 自带客户端，ready local 表示服务已就绪
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Qdrant（向量数据库）
+  #   6333 = HTTP/REST API（同时支持 gRPC 6334，暂不映射）
+  # ---------------------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:v1.19.1
+    container_name: fashionai-qdrant
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks:
+      - internal
+      - host-access
+    healthcheck:
+      # 使用 bash 内置 /dev/tcp 探测端口（镜像内无 curl/wget）
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# =============================================================================
+# 数据卷 —— 数据持久化，docker compose down 不删除，down -v 才删除
+# =============================================================================
+volumes:
+  postgres-data:
+    name: fashionai-postgres-data
+  redis-data:
+    name: fashionai-redis-data
+  minio-data:
+    name: fashionai-minio-data
+  qdrant-data:
+    name: fashionai-qdrant-data
+
+# =============================================================================
+# 网络
+#   internal    —— internal: true，无出公网网关，仅容器间东西向通信
+#   host-access —— 普通 bridge，仅用于发布端口到宿主机（开发/验收）
+# 注意: Docker 不会为只挂在 internal 网络上的容器发布端口（绑定为 null），
+#       因此需要本机访问的服务必须同时挂接 host-access。
+# =============================================================================
+networks:
+  internal:
+    name: fashionai-internal
+    driver: bridge
+    internal: true
+  host-access:
+    name: fashionai-host-access
+    driver: bridge
