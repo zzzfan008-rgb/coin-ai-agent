@@ -1,0 +1,59 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+api-core/target/
+api-gateway/server
+api-gateway/*.exe
+web-client/node_modules/
+web-client/dist/
+web-client/.vite/
+
+# Docker
+.docker/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Rust
+Cargo.lock
+api-core/.cargo/
+
+# Logs
+*.log
+logs/
+
+# Worktrees (managed by orchestrator)
+.worktrees/
+
+# Build artifacts
+dist/
+build/
+*.o
+*.a
+*.pkg
+
+# Database dumps
+*.sql.gz
+*.dump
+
+# MinIO data
+minio-data/
+
+# Qdrant data
+qdrant-data/
