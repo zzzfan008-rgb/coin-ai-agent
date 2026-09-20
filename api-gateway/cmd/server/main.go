@@ -71,19 +71,21 @@ func main() {
 	}
 
 	var (
-		authSvc    *service.AuthService
-		userSvc    *service.UserService
-		deptSvc    *service.DeptService
-		roleSvc    *service.RoleService
-		sessionSvc *service.SessionService
-		chatH      *handler.ChatHandler
+		authSvc     *service.AuthService
+		userSvc      *service.UserService
+		deptSvc      *service.DeptService
+		roleSvc      *service.RoleService
+		sessionSvc    *service.SessionService
+		auditSvc     *service.AuditService
+		chatH        *handler.ChatHandler
 	)
 	if pool != nil {
-		authSvc    = service.NewAuthService(pool, jwtSvc)
-		userSvc    = service.NewUserService(pool)
-		deptSvc    = service.NewDeptService(pool)
-		roleSvc    = service.NewRoleService(pool)
-		sessionSvc = service.NewSessionService(pool)
+		authSvc     = service.NewAuthService(pool, jwtSvc)
+		userSvc     = service.NewUserService(pool)
+		deptSvc     = service.NewDeptService(pool)
+		roleSvc     = service.NewRoleService(pool)
+		sessionSvc  = service.NewSessionService(pool)
+		auditSvc    = service.NewAuditService(pool)
 	}
 
 	chatSvc := service.NewChatService(cfg.RustCoreURL)
@@ -97,13 +99,13 @@ func main() {
 	var healthH  *handler.HealthHandler
 
 	if pool != nil {
-		authH    = handler.NewAuthHandler(authSvc)
+		authH    = handler.NewAuthHandler(authSvc, auditSvc)
 		userH    = handler.NewUserHandler(userSvc)
 		deptH    = handler.NewDeptHandler(deptSvc)
 		roleH    = handler.NewRoleHandler(roleSvc)
 		sessionH = handler.NewSessionHandler(sessionSvc, chatSvc)
 	}
-	chatH = handler.NewChatHandler(chatSvc)
+	chatH = handler.NewChatHandler(chatSvc, jwtSvc)
 	healthH = handler.NewHealthHandler(chatSvc)
 
 	// ── Router ───────────────────────────────────────────────────────────────
@@ -161,6 +163,9 @@ func main() {
 		api.Use(jwtMw)
 		api.Use(rlMw)
 		api.Use(rbacMw)
+		if auditSvc != nil {
+			api.Use(middleware.AuditLogger(auditSvc))
+		}
 
 		api.HandleFunc("/users", userH.List).Methods(http.MethodGet)
 		api.HandleFunc("/depts", deptH.List).Methods(http.MethodGet)

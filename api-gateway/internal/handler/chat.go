@@ -9,17 +9,20 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"fashionai/api-gateway/internal/middleware"
 	"fashionai/api-gateway/internal/model"
 	"fashionai/api-gateway/internal/service"
+	"fashionai/api-gateway/pkg/auth"
 )
 
 // ChatHandler handles OpenAI-compatible chat endpoints and WebSocket.
 type ChatHandler struct {
 	chatSvc *service.ChatService
+	jwtSvc  *auth.JWTService
 }
 
-func NewChatHandler(chatSvc *service.ChatService) *ChatHandler {
-	return &ChatHandler{chatSvc: chatSvc}
+func NewChatHandler(chatSvc *service.ChatService, jwtSvc *auth.JWTService) *ChatHandler {
+	return &ChatHandler{chatSvc: chatSvc, jwtSvc: jwtSvc}
 }
 
 var upgrader = websocket.Upgrader{
@@ -32,6 +35,7 @@ var upgrader = websocket.Upgrader{
 
 // Completions handles POST /v1/chat/completions.
 // Supports both stream=true (SSE) and stream=false (JSON).
+// JWT claims are available via context (v1 router mounts JWTMiddleware).
 func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 	var req model.ChatCompletionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -42,8 +46,15 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 		req.Model = "gpt-4o"
 	}
 
-	// Proxy to Rust core
-	resp, err := h.chatSvc.ProxyRequest(r.Context(), req)
+	// Inject user_context from JWT claims
+	claims := middleware.GetClaims(r.Context())
+	userID, orgID, deptID, role := "", "", "", ""
+	if claims != nil {
+		userID, orgID, deptID, role = claims.Subject, claims.OrgID, claims.DeptID, claims.Role
+	}
+
+	// Proxy to Rust core with user_context injected
+	resp, err := h.chatSvc.ProxyRequestWithContext(r.Context(), req, userID, orgID, deptID, role, middleware.GetClientIP(r))
 	if err != nil {
 		log.Printf("[chat] proxy error: %v", err)
 		writeError(w, http.StatusBadGateway, "UPSTREAM_ERROR", "failed to reach core service")
@@ -105,6 +116,16 @@ func (h *ChatHandler) WSChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate JWT — reject garbage tokens instead of upgrading blindly
+	claims, err := h.jwtSvc.Validate(token)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid or expired token")
+		return
+	}
+
+	userID, orgID, deptID, role := claims.Subject, claims.OrgID, claims.DeptID, claims.Role
+	clientIP := middleware.GetClientIP(r)
+
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("[ws] upgrade error: %v", err)
@@ -133,7 +154,7 @@ func (h *ChatHandler) WSChat(w http.ResponseWriter, r *http.Request) {
 		falseVal := false
 		req.Stream = &falseVal
 
-		resp, err := h.chatSvc.ProxyRequest(r.Context(), req)
+		resp, err := h.chatSvc.ProxyRequestWithContext(r.Context(), req, userID, orgID, deptID, role, clientIP)
 		if err != nil {
 			ws.WriteJSON(map[string]string{"error": "upstream_error: core service unreachable"})
 			continue

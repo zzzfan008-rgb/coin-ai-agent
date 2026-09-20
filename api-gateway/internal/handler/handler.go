@@ -13,11 +13,12 @@ import (
 )
 
 type AuthHandler struct {
-	svc *service.AuthService
+	svc      *service.AuthService
+	auditSvc *service.AuditService
 }
 
-func NewAuthHandler(svc *service.AuthService) *AuthHandler {
-	return &AuthHandler{svc: svc}
+func NewAuthHandler(svc *service.AuthService, auditSvc *service.AuditService) *AuthHandler {
+	return &AuthHandler{svc: svc, auditSvc: auditSvc}
 }
 
 // Register godoc
@@ -54,6 +55,11 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
+	if h.auditSvc != nil {
+		userID, _ := uuid.Parse(resp.UserID)
+		orgID, _ := uuid.Parse(resp.OrgID)
+		go h.auditSvc.Log(r.Context(), orgID, userID, "auth.register", "user", &userID, middleware.GetClientIP(r))
+	}
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -85,6 +91,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
+	}
+	if h.auditSvc != nil {
+		userID, _ := uuid.Parse(resp.UserID)
+		orgID, _ := uuid.Parse(resp.OrgID)
+		go h.auditSvc.Log(r.Context(), orgID, userID, "auth.login", "user", &userID, middleware.GetClientIP(r))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

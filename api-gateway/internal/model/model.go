@@ -43,6 +43,17 @@ type ChatCompletionRequest struct {
 	MaxTokens   *int                    `json:"max_tokens,omitempty"`
 	Temperature *float64                `json:"temperature,omitempty"`
 	TopP        *float64                `json:"top_p,omitempty"`
+	// UserContext is injected by the gateway from JWT claims before forwarding to core.
+	UserContext *UserContext            `json:"user_context,omitempty"`
+}
+
+// UserContext carries identity info from the JWT for core service authorization.
+type UserContext struct {
+	UserID   string `json:"user_id"`
+	OrgID    string `json:"org_id"`
+	DeptID   string `json:"dept_id"`
+	Role     string `json:"role"`
+	IPAddress string `json:"ip_address,omitempty"`
 }
 
 type ChatMessage struct {

@@ -53,7 +53,7 @@ impl AppConfig {
 
             database_url: env_var(
                 "DATABASE_URL",
-                "postgres://fashion_ai:fashion_ai_dev@localhost:5433/fashion_ai",
+                "postgres://fashion_ai:***@localhost:5433/fashion_ai?sslmode=disable",
             ),
             db_max_connections: env_parse("DB_MAX_CONNECTIONS", 10),
 

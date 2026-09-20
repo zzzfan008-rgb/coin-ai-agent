@@ -17,6 +17,7 @@ func InitSchema(ctx context.Context, db *sqlx.DB, logger *slog.Logger) error {
 	CREATE TABLE IF NOT EXISTS orgs (
 	  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 	  name VARCHAR(255) NOT NULL,
+	  slug VARCHAR(255) NOT NULL UNIQUE,
 	  created_at TIMESTAMPTZ DEFAULT NOW()
 	);
 

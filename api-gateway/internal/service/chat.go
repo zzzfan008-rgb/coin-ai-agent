@@ -48,6 +48,19 @@ func (s *ChatService) ProxyRequest(ctx context.Context, req model.ChatCompletion
 	return resp, nil
 }
 
+// ProxyRequestWithContext forwards a chat completion request to the Rust core,
+// injecting user_context built from JWT claims.
+func (s *ChatService) ProxyRequestWithContext(ctx context.Context, req model.ChatCompletionRequest, userID, orgID, deptID, role, ipAddress string) (*http.Response, error) {
+	req.UserContext = &model.UserContext{
+		UserID:    userID,
+		OrgID:     orgID,
+		DeptID:    deptID,
+		Role:      role,
+		IPAddress: ipAddress,
+	}
+	return s.ProxyRequest(ctx, req)
+}
+
 // GetModels returns the available model list from Rust core (or returns defaults).
 func (s *ChatService) GetModels(ctx context.Context) (*model.ModelList, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.rustCoreURL+"/v1/models", nil)

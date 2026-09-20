@@ -17,8 +17,9 @@ FROM rust:1.76-bookworm AS builder
 
 WORKDIR /build
 
-# 先拷贝 Cargo.toml 并用占位 main.rs 预编译依赖，利用 Docker 层缓存
+# 先拷贝 Cargo.toml 和 Cargo.lock 并用占位 main.rs 预编译依赖，利用 Docker 层缓存
 COPY api-core/Cargo.toml ./
+COPY api-core/Cargo.lock ./
 RUN mkdir -p src \
     && echo 'fn main() {}' > src/main.rs \
     # 预拉取并编译所有依赖（失败也继续，无依赖时这一步本就为空）

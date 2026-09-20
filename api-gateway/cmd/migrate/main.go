@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 
 	"github.com/joho/godotenv"
 
@@ -19,15 +18,21 @@ func main() {
 
 	ctx := context.Background()
 
-	// Run migrations
-	if err := db.RunMigrations(ctx, cfg.DatabaseURL); err != nil {
-		log.Fatalf("[FATAL] migrations failed: %v", err)
-	}
-
-	v, err := db.CurrentVersion(cfg.DatabaseURL)
+	// Connect to database to run schema init
+	pool, err := db.Open(db.Config{
+		DatabaseURL:    cfg.DatabaseURL,
+		MaxOpenConns:   1,
+		MaxIdleConns:   1,
+		ConnMaxLifetime: 0,
+	})
 	if err != nil {
-		log.Printf("[WARN] could not read migration version: %v", err)
-	} else {
-		fmt.Printf("[OK] current migration version: %d\n", v)
+		log.Fatalf("[FATAL] cannot connect to database: %v", err)
 	}
+	defer pool.Close()
+
+	// Run InitSchema (Phase 1A schema without migration files)
+	if err := db.InitSchema(ctx, pool, nil); err != nil {
+		log.Fatalf("[FATAL] schema init failed: %v", err)
+	}
+	fmt.Println("[OK] schema initialized")
 }

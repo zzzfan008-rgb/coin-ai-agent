@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,10 +52,11 @@ func (s *AuthService) Register(ctx context.Context, req model.RegisterRequest) (
 		return nil, ErrUserExists
 	}
 
-	// Create org
+	// Create org with a unique slug
+	slug := req.Username + "-" + randomString(8)
 	var orgID uuid.UUID
 	err = tx.GetContext(ctx, &orgID,
-		"INSERT INTO orgs(name) VALUES($1) RETURNING id", req.OrgName)
+		"INSERT INTO orgs(name, slug) VALUES($1,$2) RETURNING id", req.OrgName, slug)
 	if err != nil {
 		return nil, fmt.Errorf("create org: %w", err)
 	}
@@ -110,12 +113,12 @@ func (s *AuthService) Register(ctx context.Context, req model.RegisterRequest) (
 // Login verifies credentials and returns a JWT.
 func (s *AuthService) Login(ctx context.Context, req model.LoginRequest) (*model.AuthResponse, error) {
 	var user struct {
-		ID          uuid.UUID
-		OrgID       uuid.UUID
-		DeptID      uuid.UUID
-		Password    string
+		ID          uuid.UUID `db:"id"`
+		OrgID       uuid.UUID `db:"org_id"`
+		DeptID      uuid.UUID `db:"dept_id"`
+		Password    string    `db:"password_hash"`
 		DisplayName sql.NullString
-		Role        string
+		Role        string `db:"role"`
 	}
 	err := s.db.GetContext(ctx, &user,
 		`SELECT id, org_id, dept_id, password_hash, display_name, role
@@ -564,4 +567,11 @@ func joinStrings(parts []string, sep string) string {
 		result += sep + p
 	}
 	return result
+}
+
+// randomString generates a random lowercase hex string of n bytes.
+func randomString(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)[:n]
 }

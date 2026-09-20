@@ -24,7 +24,7 @@ func Load() *Config {
 		JWTKind:     env("JWT_KIND", "HS256"),
 		JWTSecret:   env("JWT_SECRET", "change-me-in-production-32chars!!"),
 		JWTExpHours: expHours,
-		DatabaseURL: env("DATABASE_URL", "postgres://fashion_ai:fashion_ai_dev@localhost:5432/fashion_ai"),
+		DatabaseURL: env("DATABASE_URL", "postgres://fashion_ai:***@localhost:5432/fashion_ai?sslmode=disable"),
 		RedisURL:    env("REDIS_URL", "redis://localhost:6379"),
 		RustCoreURL: env("RUST_CORE_URL", "http://localhost:8081"),
 		MinimaxKey:  env("MINIMAX_API_KEY", ""),

@@ -2,14 +2,14 @@ package middleware
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"fashionai/api-gateway/internal/service"
 	"fashionai/api-gateway/pkg/auth"
 	"fashionai/api-gateway/pkg/rbac"
 )
@@ -151,11 +151,10 @@ func RBACMiddleware(rbacSvc *rbac.RBAC) mux.MiddlewareFunc {
 	}
 }
 
-// AuditLogger returns a middleware that logs every request in JSON format.
-func AuditLogger(auditSvc any) muxMiddleware {
+// AuditLogger returns a middleware that logs every request to DB via AuditService.
+func AuditLogger(auditSvc *service.AuditService) mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			start := time.Now()
 			reqID := r.Header.Get("X-Request-ID")
 			if reqID == "" {
 				reqID = uuid.New().String()
@@ -166,25 +165,17 @@ func AuditLogger(auditSvc any) muxMiddleware {
 			next.ServeHTTP(rw, r)
 
 			claims := GetClaims(r.Context())
-			userID, orgID := "", ""
-			if claims != nil {
-				userID = claims.Subject
-				orgID = claims.OrgID
+			if claims == nil {
+				return
 			}
+			userUUID, _ := uuid.Parse(claims.Subject)
+			orgUUID, _ := uuid.Parse(claims.OrgID)
+			clientIP := GetClientIP(r)
 
-			entry := AuditEntry{
-				Timestamp:  start.UTC().Format(time.RFC3339),
-				RequestID:  reqID,
-				UserID:     userID,
-				OrgID:      orgID,
-				Method:     r.Method,
-				Path:       r.URL.Path,
-				StatusCode: rw.status,
-				LatencyMs:  time.Since(start).Milliseconds(),
-				ClientIP:   GetClientIP(r),
-			}
-			entryJSON, _ := json.Marshal(entry)
-			log.Printf("[AUDIT] %s", entryJSON)
+			// Write audit record to DB asynchronously to avoid blocking response
+			go auditSvc.Log(r.Context(), orgUUID, userUUID,
+				fmt.Sprintf("%s %s", r.Method, r.URL.Path),
+				"http_request", nil, clientIP)
 		})
 	}
 }
