@@ -1,4 +1,4 @@
-.PHONY: help dev prod build test clean lint fmt docker-up docker-down
+.PHONY: help dev prod build test run lint fmt clean docker-up docker-down
 
 # Variables
 COMPOSE := docker compose
@@ -9,7 +9,8 @@ GIT_REPO := $(shell git rev-parse --show-toplevel 2>/dev/null || echo ".")
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-# Docker
+# ── Docker ────────────────────────────────────────────────────────────────────
+
 docker-up: ## Start all services (docker compose up -d)
 	$(COMPOSE) up -d
 
@@ -19,7 +20,8 @@ docker-down: ## Stop all services
 docker-logs: ## Tail logs from all services
 	$(COMPOSE) logs -f
 
-# Database
+# ── Database ──────────────────────────────────────────────────────────────────
+
 db-migrate: ## Run database migrations
 	cd api-gateway && go run ./cmd/migrate/main.go
 
@@ -29,7 +31,8 @@ db-reset: ## Reset database (WARNING: destroys data)
 db-shell: ## Open psql shell
 	docker compose exec postgres psql -U fashion_ai -d fashion_ai
 
-# Backend (Go)
+# ── Backend (Go) ──────────────────────────────────────────────────────────────
+
 go-build: ## Build Go API gateway
 	cd api-gateway && go build -o bin/server ./cmd/server
 
@@ -45,7 +48,8 @@ go-lint: ## Lint Go code
 go-fmt: ## Format Go code
 	cd api-gateway && go fmt ./...
 
-# Core (Rust)
+# ── Core (Rust) ───────────────────────────────────────────────────────────────
+
 core-build: ## Build Rust core service
 	cd api-core && cargo build --release
 
@@ -61,7 +65,8 @@ core-clippy: ## Run clippy linter
 core-fmt: ## Format Rust code
 	cd api-core && cargo fmt
 
-# Frontend (React)
+# ── Frontend (React) ──────────────────────────────────────────────────────────
+
 web-install: ## Install frontend dependencies
 	cd web-client && npm install
 
@@ -77,7 +82,14 @@ web-preview: ## Preview production build
 web-test: ## Run frontend tests
 	cd web-client && npm test
 
-# Full stack
+web-lint: ## Lint frontend code
+	cd web-client && npm run lint
+
+web-fmt: ## Format frontend code
+	cd web-client && npx prettier --write .
+
+# ── Full Stack ────────────────────────────────────────────────────────────────
+
 dev: docker-up ## Start Docker + run all services in dev mode
 	@echo "Waiting for services..."
 	@sleep 5
@@ -87,14 +99,26 @@ prod: docker-up ## Start Docker for production
 	cd api-gateway && go build -o bin/server ./cmd/server
 	cd api-core && cargo build --release
 
-test: go-test core-test ## Run all tests
+build: go-build core-build web-build ## Build all modules
+	@echo "All modules built successfully"
 
-# Quality
-lint: go-lint core-clippy ## Run all linters
+test: go-test core-test web-test ## Run all tests
 
-fmt: go-fmt core-fmt ## Format all code
+run: ## Run all services locally (requires dependencies)
+	@echo "Starting all services locally..."
+	@make go-run &
+	@make core-run &
+	@make web-dev
+	@wait
 
-# Clean
+# ── Quality ───────────────────────────────────────────────────────────────────
+
+lint: go-lint core-clippy web-lint ## Run all linters
+
+fmt: go-fmt core-fmt web-fmt ## Format all code
+
+# ── Clean ─────────────────────────────────────────────────────────────────────
+
 clean: ## Remove build artifacts
 	rm -rf api-gateway/bin
 	rm -rf api-core/target

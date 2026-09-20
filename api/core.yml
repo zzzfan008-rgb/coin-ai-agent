@@ -1,0 +1,576 @@
+openapi: 3.0.3
+info:
+  title: Fashion AI Platform — Core Service
+  description: |
+    Rust 核心推理服务（codex-rs fork）。
+    - Agent Loop（LLM + 工具调用）
+    - SSE 流式输出
+    - 会话管理（PostgreSQL + Redis）
+    - LLM 调用（MiniMax / DeepSeek）
+    - 预留 Casbin PreToolCall Hook
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8081
+    description: Local core service
+
+security:
+  - InternalAuth: []
+
+tags:
+  - name: chat
+    description: 核心对话处理
+  - name: sessions
+    description: 会话管理
+  - name: llm
+    description: LLM 调用
+  - name: skills
+    description: Skill 执行
+
+paths:
+  # ── Internal: Chat ──────────────────────────────────────────────────────────
+
+  /v1/chat/completions:
+    post:
+      tags: [chat]
+      summary: 核心对话处理（内部接口，Go 网关调用）
+      description: |
+        接收来自 Go 网关的对话请求，执行 Agent Loop，调用 LLM，返回 SSE 流。
+        此接口不处理认证（由 Go 网关负责）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CoreChatRequest'
+      responses:
+        '200':
+          description: 流式对话响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoreChatResponse'
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE 流格式
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '502':
+          description: LLM 调用失败
+
+  /v1/chat/completions/stream:
+    post:
+      tags: [chat]
+      summary: SSE 流式对话（专用端点）
+      description: |
+        与 /v1/chat/completions 相同，但强制 stream=true，
+        专用于需要流式响应的场景。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CoreChatRequest'
+      responses:
+        '200':
+          description: SSE 流
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  # ── Internal: Sessions ────────────────────────────────────────────────────
+
+  /internal/sessions:
+    post:
+      tags: [sessions]
+      summary: 创建会话（内部）
+      description: 创建新会话，返回 session_id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+      responses:
+        '201':
+          description: 会话创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+
+  /internal/sessions/{id}:
+    get:
+      tags: [sessions]
+      summary: 获取会话（内部）
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: 会话详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /internal/sessions/{id}/messages:
+    get:
+      tags: [sessions]
+      summary: 获取消息历史（内部）
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: before
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 消息列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageList'
+    post:
+      tags: [sessions]
+      summary: 保存消息（内部）
+      description: 将对话消息持久化到 PostgreSQL
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveMessageRequest'
+      responses:
+        '201':
+          description: 消息保存成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+
+  # ── Internal: Skills ────────────────────────────────────────────────────────
+
+  /internal/skills/execute:
+    post:
+      tags: [skills]
+      summary: 执行 Skill（内部）
+      description: |
+        执行指定的 Skill，返回结果。
+        Phase 1B 接入 Casbin PreToolCall Hook。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillExecuteRequest'
+      responses:
+        '200':
+          description: Skill 执行成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillExecuteResponse'
+        '403':
+          description: 无权调用此 Skill
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /internal/skills/list:
+    get:
+      tags: [skills]
+      summary: 可用 Skill 列表（内部）
+      responses:
+        '200':
+          description: Skill 列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillList'
+
+  # ── Health ──────────────────────────────────────────────────────────────────
+
+  /health:
+    get:
+      tags: [health]
+      summary: 核心服务健康检查
+      security: []
+      responses:
+        '200':
+          description: 服务健康
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoreHealthResponse'
+
+# ── Components ────────────────────────────────────────────────────────────────
+
+components:
+
+  securitySchemes:
+    InternalAuth:
+      type: apiKey
+      in: header
+      name: X-Internal-Token
+      description: 内部服务间调用密钥（由 Go 网关传递）
+
+  parameters:
+    SessionId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+
+    # ── Chat ──────────────────────────────────────────────────────────────────
+
+    CoreChatRequest:
+      type: object
+      required: [model, messages, user_context]
+      properties:
+        model:
+          type: string
+          example: gpt-4o
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+        stream:
+          type: boolean
+          default: true
+        temperature:
+          type: number
+          default: 0.7
+        max_tokens:
+          type: integer
+        extra_body:
+          type: object
+          properties:
+            session_id:
+              type: string
+            skill_ids:
+              type: array
+              items:
+                type: string
+            mcp_server_ids:
+              type: array
+              items:
+                type: string
+            knowledge_collections:
+              type: array
+              items:
+                type: string
+        user_context:
+          $ref: '#/components/schemas/UserContext'
+
+    UserContext:
+      type: object
+      description: 从 Go 网关 JWT Claims 传递的用户上下文
+      required: [user_id, org_id, dept_id, role]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        org_id:
+          type: string
+          format: uuid
+        dept_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [admin, designer, viewer]
+        ip_address:
+          type: string
+          nullable: true
+
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant, tool]
+        content:
+          type: string
+
+    CoreChatResponse:
+      type: object
+      description: 非流式响应结构（流式时每个 chunk 为此结构）
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          enum: [chat.completion]
+        created:
+          type: integer
+          format: int64
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              message:
+                type: object
+                properties:
+                  role:
+                    type: string
+                  content:
+                    type: string
+              finish_reason:
+                type: string
+        usage:
+          type: object
+          properties:
+            prompt_tokens:
+              type: integer
+            completion_tokens:
+              type: integer
+            total_tokens:
+              type: integer
+
+    # ── Sessions ─────────────────────────────────────────────────────────────
+
+    Session:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        org_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        is_archived:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateSessionRequest:
+      type: object
+      required: [org_id, user_id]
+      properties:
+        org_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          maxLength: 500
+
+    # ── Messages ─────────────────────────────────────────────────────────────
+
+    Message:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        session_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [user, assistant, system, tool]
+        content:
+          type: string
+        model:
+          type: string
+          nullable: true
+        token_count:
+          type: integer
+          nullable: true
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    SaveMessageRequest:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [user, assistant, system, tool]
+        content:
+          type: string
+        model:
+          type: string
+        token_count:
+          type: integer
+        metadata:
+          type: object
+          additionalProperties: true
+
+    MessageList:
+      type: object
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        has_more:
+          type: boolean
+        next_cursor:
+          type: string
+          nullable: true
+
+    # ── Skills ───────────────────────────────────────────────────────────────
+
+    SkillDefinition:
+      type: object
+      description: Skill 元信息（从 skills/ 目录读取）
+      properties:
+        id:
+          type: string
+          example: fabric-query
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        tools:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              description:
+                type: string
+              parameters:
+                type: object
+        prompt_template:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+
+    SkillExecuteRequest:
+      type: object
+      required: [skill_id, tool_name, parameters, user_context]
+      properties:
+        skill_id:
+          type: string
+        tool_name:
+          type: string
+        parameters:
+          type: object
+          additionalProperties: true
+        user_context:
+          $ref: '#/components/schemas/UserContext'
+
+    SkillExecuteResponse:
+      type: object
+      properties:
+        skill_id:
+          type: string
+        tool_name:
+          type: string
+        result:
+          type: object
+          additionalProperties: true
+        tokens_used:
+          type: integer
+        duration_ms:
+          type: integer
+
+    SkillList:
+      type: object
+      properties:
+        skills:
+          type: array
+          items:
+            $ref: '#/components/schemas/SkillDefinition'
+
+    # ── Health ───────────────────────────────────────────────────────────────
+
+    CoreHealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, down]
+        version:
+          type: string
+        rust_version:
+          type: string
+        services:
+          type: object
+          properties:
+            database:
+              type: string
+            redis:
+              type: string
+            llm:
+              type: object
+              properties:
+                minimax:
+                  type: string
+                deepseek:
+                  type: string
+
+    # ── Errors ───────────────────────────────────────────────────────────────
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+              additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: 请求参数错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

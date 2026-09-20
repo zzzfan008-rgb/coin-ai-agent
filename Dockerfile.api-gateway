@@ -25,6 +25,7 @@ RUN go mod download
 
 # 拷贝全部源码并编译为静态链接二进制
 COPY api-gateway/ ./
+RUN go mod tidy
 # CGO_ENABLED=0 纯静态，可直接放入 scratch/alpine；-s -w 去除调试信息减小体积
 RUN CGO_ENABLED=0 GOOS=linux go build \
       -ldflags="-s -w" \
