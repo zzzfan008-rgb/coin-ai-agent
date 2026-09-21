@@ -271,3 +271,56 @@ POST /api/projects → 500 create project: pq: column "owner_id" of relation "pr
 **Findings：P0 × 2，P1 × 4，P2 × 4，P3 × 5。**
 
 核心阻断：迁移体系不可重现 + 已发布迁移被改写（F-01/F-02），直接导致 T-018 运行时不可用，并使任何新环境无法正确初始化；RAG 索引两处确定性 bug（F-03/F-04）使 T-015 主链路从未真正跑通过；T-016 管理面（API + UI）整块缺失且 designer 无法使用 MCP。须修复全部 P0/P1 后重新门禁；P2 建议同期解决。
+
+---
+
+# 9. 修复复验（2026-09-21，commit 974eed4）
+
+- **复验方式**：独立实测，不采信修复者自述。新建 3 个隔离库（`gate_reverify` / `gate_1a` / `gate_srv`），真实走 Go `cmd/migrate` 运行器、网关启动自动迁移、api-core 全链路（fake LLM/CLIP :9102、mock MCP :9101、真实 Qdrant）。
+- **环境**：4 容器健康；MINIMAX/DEEPSEEK/CLIP 真 key 仍空 → 外部冒烟继续记阻塞项（非实现缺陷）。
+
+## 9.1 逐条复验表
+
+| Finding | 复验结果 | 证据（实测命令/输出） |
+|---|---|---|
+| **P0 F-01** 迁移无可重现路径 | ✅ **闭环** | `createdb gate_reverify` → `MIGRATIONS_DIR=../migrations go run ./cmd/migrate`：9 个版本全部 applied；`SELECT version,dirty FROM schema_migrations` → 1/8/9/10/11/12/14/15/16 **全部 dirty=f**；`public` 下 **21 个对象（20 业务表+schema_migrations）**；二次运行输出 `database already up to date`（幂等）。001 已移除 schema_migrations 建表（运行器独占）、366 行索引改为 `idx_projects_owner_id`；InitSchema 已退役（migrate.go 由 100 行缩至薄封装） |
+| **P0 F-02** 001 被改写、1A 库无法升级、T-018 500 | ✅ **闭环** | ① 用 `git show 3a11e57` 的 Phase 1A 001 建出 `gate_1a`（projects 实列 `user_id/season/collection_year/tags`），插入真实 org/dept/user/项目 → Go 运行器升级：008 applied，行级验证 `owner_id` 已从 `user_id` **回填**（=33333333…）、`cover_color='#6366F1'` 兜底，旧列已下线，dirty=f，全库 21 表。② 全新库 `gate_srv` + **网关启动自动迁移**路径：启动日志 9 版本全 applied；种子用户后 `GET /api/projects` → **200**（`{"projects":[],"total":0}`），`POST` → **201**（返回 owner_id/cover_color 完整对象）。原 500 `column "owner_id" does not exist` 不再出现 |
+| **P1 F-03** RAG 索引 uuid=text | ✅ **闭环** | 上传 2880B txt（id 32f75e0b…）→ 4 秒后 DB：`status=ready, chunk_count=1, error_message=NULL`；Qdrant fashion_knowledge 中 1 点，payload 含 `doc_id=32f75e0b…` + org_id/dept_id。indexer.rs set_status/set_failed/最终 UPDATE 均已 `Uuid::parse_str` 绑定 |
+| **P1 F-04** Qdrant 集合端点错误 | ✅ **闭环** | 复验前 `DELETE` 两个集合确认 `collections=[]` → core 启动日志 `Created Qdrant collection collection=fashion_knowledge` 与 `collection=style_images`，`GET /collections` 两集合在。qdrant.rs 已改为 `PUT /collections/{name}` 且失败时 bail 带响应体 |
+| **P1 F-05** Casbin 非主闸/MCP 绕过/designer 403 | ✅ **闭环** | 真实 agent loop 角色矩阵：designer+MCPTEST → **200**（MCP 真实 invoke 后 FAKE_LLM_FINAL，fake LLM 仅在 tool 结果入历史后才出最终答，佐证工具真实执行）；viewer+MCPTEST → **403** `not allowed to invoke tool 'mcp:local-mock/fabric_search_db'`；designer+FABRICTEST → **200**；viewer+FABRICTEST → **403**。executor.rs:34 在 MCP 分流（:41）之前统一调用 `rbac::enforce_tool`；policies.csv 已给 designer 加 `mcp:local-mock/fabric_search_db, invoke`；静态 ROLE_POLICY 仅保留为「RBAC 未初始化」离线兜底，enforce 错误一律 fail-closed |
+| **P1 F-06** 知识库删除/MCP CRUD/开关/UI 缺失 | ✅ **闭环** | ① `DELETE /api/knowledge/documents/:id`（必须带 org_id/dept_id 查询参数，不带 → 400）→ 200 `status=deleted`，DB 软删除、**Qdrant 对应点清零**；伪造 dept_id → 404 `not found in this org/dept`（租户校验）。② 网关 MCP：`POST /api/mcp/servers` → 201；`GET` → 200 列表；designer POST → **403**（admin only）；`PUT /api/mcp/servers/{id}/user` `{"enabled":true}` → 200 且 `users.mcp_server_ids` JSONB 写入该 id，false → 清空；`DELETE` → 200 后列表为空。③ 前端：`KnowledgeAdmin.tsx`（335 行）/`McpAdmin.tsx`（383 行）已在 App.tsx 挂路由（`/knowledge`、`/mcp`），api/client.ts 含对应调用 |
+| **P2 F-07** Login 500（缺 db tag） | ✅ **闭环** | service.go:122 已补 `db:"display_name"`。实测 `POST /auth/login` 正确 bcrypt 密码 → **200**（返回 token + display_name=复验员）；错误密码 → **401** `invalid username or password`，不再 500 |
+| **P2 F-08** intent classify API 缺失 | ✅ **闭环** | `POST /internal/intent/classify`「帮我查一下棉面料有哪些」→ 200 `{intent:fabric, matched_keywords:[棉,面料], confidence:0.75, candidates:[], source:rule}`；闲聊 → 200 `intent=general` |
+| **P2 F-09** 工具决策未写 audit_logs | ✅ **闭环** | F-05 矩阵后查 audit_logs：4 行 `resource_type=tool`，action=`mcp_call`/`skill_call`，details JSON 含 tool/resource/allowed/role——允许与拒绝两类决策均落库（rbac/mod.rs:229 best-effort INSERT，失败只告警不影响 fail-closed） |
+| **P2 F-10** style images list 无租户过滤 | ✅ **闭环** | 种子 style 并上传图片后：GET list 带本租户 org/dept → **total=1**；带错误 dept_id → **`{images:[],total:0}`**；不带 org_id → **400**（参数必填，无默认值，fail-closed）。SQL 已为 `WHERE style_id=$1 AND org_id=$2 AND dept_id=$3` |
+
+**闭环统计：10/10（P0×2、P1×4、P2×4 全部闭环）。**
+
+## 9.2 新发现问题
+
+- **P3（新，运维坑）：相对路径依赖 cwd，cwd 不对时静默降级，服务照常启动。**
+  - 网关：在 `api-gateway/` 目录起 `cmd/server`（默认 `MIGRATIONS_DIR=migrations`，实际目录在仓库根）→ 日志仅一行 `[WARN] auto-migrate failed: read migrations dir "migrations": no such file or directory (continuing in degraded mode)`，随后正常 listening；干净库此时所有业务接口将连环 500，但启动本身成功，部署系统不会感知失败。
+  - core：从 `api-core/` 目录启动时 `current_dir()/skills` 不存在 → 日志 `Skill engine loaded: 0 skills`（INFO 级，无 WARN/ERROR），三个 Skill 整块不可用；intent rules 路径同样依赖编译期 manifest 路径拼接。
+  - 建议（按 orchestrator 现场要求记录）：默认路径改为相对二进制位置/仓库根解析，或在降级为 degraded / 0 skills 时启动日志显著 ERROR 告警（必要时 fail-fast），并在部署文档钉死工作目录。
+  - 本次复验用 `MIGRATIONS_DIR=/Users/lionfan/projects/fashion-ai-platform/migrations` 与仓库根 cwd 规避后，所有功能正常，故不影响本次门禁结论。
+
+## 9.3 阻塞项（未变，环境而非实现缺陷）
+
+1. MINIMAX / DEEPSEEK 真 key 为空 → 真实 LLM 流式/切换/计费/embedding 冒烟仍未执行；代码路径已由 fake 服务器完整驱动，**接入真 key 后必须回归**。
+2. CLIP 真端点/key 为空 → 真实 CLIP 编码冒烟未执行；同由 fake 驱动（图片上传→Qdrant 点建成已复核）。
+
+## 9.4 更新总体结论：✅ 通过（原 F-01~F-10 全闭环；遗留阻塞项与新 P3 不阻断）
+
+| 卡片 | 复验后结论 |
+|---|---|
+| T-011 | ✅ 通过 |
+| T-012 | ✅ 通过 |
+| T-013 | ✅ 有条件通过（真 key 冒烟阻塞） |
+| T-014 | ✅ 通过（classify API 已补） |
+| T-015 | ✅ 有条件通过（真 embedding key 冒烟阻塞） |
+| T-016 | ✅ 有条件通过（真 key 冒烟阻塞；管理 API/UI/开关已齐） |
+| T-017 | ✅ 有条件通过（统一 Casbin 闸+audit 已接线；原 Redis 缓存/热更新诉求仍为技术债） |
+| T-018 | ✅ 通过（1A 库实测可前向升级，GET/POST 200/201） |
+| T-019 | ✅ 有条件通过（真 CLIP key 冒烟阻塞；list 租户过滤已补） |
+
+**放行条件**：① 接入真实 MINIMAX/DEEPSEEK/CLIP key 后完成外部冒烟回归（唯一硬阻塞）；② 新增 P3（cwd 相对路径静默降级）建议在正式部署前修复；③ 原报告 P3 技术债（F-11~F-15）按计划消化，不阻断 Phase 2 启动。
