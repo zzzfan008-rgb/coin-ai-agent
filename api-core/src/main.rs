@@ -18,6 +18,7 @@ mod llm;
 mod agent;
 mod tool;
 mod skill;
+mod skill_engine;
 mod mcp;
 mod session;
 mod middleware;
@@ -65,6 +66,39 @@ async fn main() -> Result<()> {
 
     let llm_client = Arc::new(LlmClient::new(&config)?);
     tracing::info!("LLM client ready (provider={})", config.llm_provider);
+
+    // Probe the default LLM on startup; if unreachable, log but don't block
+    // (the provider may become available later).
+    let llm_health = llm_client.health_check().await;
+    if llm_health {
+        tracing::info!("LLM health check: OK ({})", config.llm_provider);
+    } else {
+        tracing::warn!(
+            "LLM health check: FAILED ({}) — requests may fail until the provider is reachable",
+            config.llm_provider
+        );
+    }
+
+    // ── SKILL Engine ────────────────────────────────────────────────────────────
+    let project_root = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .canonicalize()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let skills_dir = project_root.join("skills");
+    tracing::info!("Loading skills from {:?}", skills_dir);
+
+    let engine = crate::skill_engine::SkillEngine::load_from_dir(&skills_dir)
+        .map_err(|e| anyhow::anyhow!("Failed to load skill engine: {e}"))?;
+
+    let skill_ids: Vec<_> = engine.loader.skill_ids();
+    tracing::info!("Skill engine loaded: {} skills ({:?})", skill_ids.len(), skill_ids);
+
+    {
+        let mut global = crate::skill_engine::SKILL_ENGINE
+            .write()
+            .expect("SKILL_ENGINE poisoned");
+        *global = Some(engine);
+    }
 
     let services = Arc::new(AppServices {
         config,

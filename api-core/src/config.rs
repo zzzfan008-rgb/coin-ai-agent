@@ -64,11 +64,11 @@ impl AppConfig {
             core_port: env_parse("CORE_PORT", 8081),
 
             llm_provider: env_var("LLM_PROVIDER", "minimax"),
-            llm_timeout_secs: env_parse("LLM_TIMEOUT_SECS", 120),
+            llm_timeout_secs: env_parse("LLM_TIMEOUT_SECS", 60),
 
             minimax_api_key: env_var("MINIMAX_API_KEY", ""),
             minimax_model: env_var("MINIMAX_MODEL", "MiniMax-Text-01"),
-            minimax_base_url: env_var("MINIMAX_BASE_URL", "https://api.minimax.chat/v1"),
+            minimax_base_url: env_var("MINIMAX_BASE_URL", "https://api.minimaxi.chat/v1"),
 
             deepseek_api_key: env_var("DEEPSEEK_API_KEY", ""),
             deepseek_model: env_var("DEEPSEEK_MODEL", "deepseek-chat"),

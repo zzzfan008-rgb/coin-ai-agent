@@ -53,6 +53,23 @@ export interface Session {
   updated_at: string
 }
 
+export interface Project {
+  id: string
+  org_id: string
+  dept_id: string
+  owner_id: string
+  name: string
+  description?: string | null
+  cover_color: string
+  is_archived: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectDetail extends Project {
+  sessions: Session[]
+}
+
 export interface SessionMessage {
   id: string
   role: 'user' | 'assistant' | 'system' | 'tool'
@@ -145,6 +162,8 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
     ),
   })
   if (!res.ok) throw await readError(res)
+  if (res.status === 204) return undefined as T
+  if (res.headers.get('content-length') === '0') return undefined as T
   return (await res.json()) as T
 }
 
@@ -191,6 +210,74 @@ export async function listMessages(
   sessionId: string,
 ): Promise<{ messages: SessionMessage[]; has_more: boolean }> {
   return apiFetch(`/api/sessions/${sessionId}/messages?limit=100`)
+}
+
+// ── 项目接口 ────────────────────────────────────────────────────────────────
+
+export async function listProjects(archived = false): Promise<{ projects: Project[]; total: number }> {
+  return apiFetch(`/api/projects?archived=${archived}`)
+}
+
+export async function createProject(body: {
+  name: string
+  description?: string
+  cover_color?: string
+}): Promise<Project> {
+  return apiFetch('/api/projects', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function getProject(id: string): Promise<ProjectDetail> {
+  return apiFetch(`/api/projects/${id}`)
+}
+
+export async function updateProject(
+  id: string,
+  body: { name?: string; description?: string; cover_color?: string },
+): Promise<Project> {
+  return apiFetch(`/api/projects/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  await apiFetch(`/api/projects/${id}`, { method: 'DELETE' })
+}
+
+export async function archiveProject(id: string): Promise<Project> {
+  return apiFetch(`/api/projects/${id}/archive`, { method: 'POST' })
+}
+
+export async function unarchiveProject(id: string): Promise<Project> {
+  return apiFetch(`/api/projects/${id}/unarchive`, { method: 'POST' })
+}
+
+export async function addSessionToProject(
+  projectId: string,
+  sessionId: string,
+): Promise<void> {
+  await apiFetch(`/api/projects/${projectId}/sessions`, {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId }),
+  })
+}
+
+export async function removeSessionFromProject(
+  projectId: string,
+  sessionId: string,
+): Promise<void> {
+  await apiFetch(`/api/projects/${projectId}/sessions/${sessionId}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function listProjectsForSession(
+  sessionId: string,
+): Promise<{ projects: Project[] }> {
+  return apiFetch(`/api/sessions/${sessionId}/projects`)
 }
 
 // ── 流式对话（SSE） ─────────────────────────────────────────────────────────

@@ -116,6 +116,11 @@ impl SkillRegistry {
         self.skills.values().collect()
     }
 
+    /// Return just the skill IDs.
+    pub fn skill_ids(&self) -> Vec<String> {
+        self.skills.keys().cloned().collect()
+    }
+
     /// Execute a skill's run.py with given parameters (Phase 1B).
     pub async fn execute(
         &self,

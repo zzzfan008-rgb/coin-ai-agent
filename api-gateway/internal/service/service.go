@@ -19,10 +19,11 @@ import (
 
 var (
 	ErrUserExists      = errors.New("username already exists")
-	ErrInvalidCreds   = errors.New("invalid credentials")
-	ErrUserNotFound    = errors.New("user not found")
-	ErrSessionNotFound = errors.New("session not found")
-	ErrDeptNotFound   = errors.New("department not found")
+	ErrInvalidCreds    = errors.New("invalid credentials")
+	ErrUserNotFound     = errors.New("user not found")
+	ErrSessionNotFound  = errors.New("session not found")
+	ErrDeptNotFound     = errors.New("department not found")
+	ErrProjectNotFound  = errors.New("project not found")
 )
 
 type AuthService struct {
@@ -556,6 +557,328 @@ func (s *AuditService) Log(ctx context.Context, orgID, userID uuid.UUID, action,
 		`INSERT INTO audit_logs(org_id, user_id, action, resource_type, resource_id, ip_address)
 		 VALUES($1,$2,$3,$4,$5,$6)`,
 		orgID, userID, action, resourceType, resourceID, ip)
+}
+
+// ProjectService handles project CRUD.
+type ProjectService struct {
+	db *sqlx.DB
+}
+
+func NewProjectService(db *sqlx.DB) *ProjectService {
+	return &ProjectService{db: db}
+}
+
+func (s *ProjectService) Create(ctx context.Context, orgID, deptID, ownerID uuid.UUID, req model.CreateProjectRequest) (*model.ProjectDTO, error) {
+	coverColor := req.CoverColor
+	if coverColor == "" {
+		coverColor = "#6366F1"
+	}
+	var row struct {
+		ID          uuid.UUID `db:"id"`
+		OrgID       uuid.UUID `db:"org_id"`
+		DeptID      uuid.UUID `db:"dept_id"`
+		OwnerID     uuid.UUID `db:"owner_id"`
+		Name        string    `db:"name"`
+		Description *string   `db:"description"`
+		CoverColor  string    `db:"cover_color"`
+		IsArchived  bool      `db:"is_archived"`
+		CreatedAt   time.Time `db:"created_at"`
+		UpdatedAt   time.Time `db:"updated_at"`
+	}
+	err := s.db.GetContext(ctx, &row,
+		`INSERT INTO projects(org_id, dept_id, owner_id, name, description, cover_color)
+		 VALUES($1,$2,$3,$4,$5,$6)
+		 RETURNING id, org_id, dept_id, owner_id, name, description, cover_color,
+		           is_archived, created_at, updated_at`,
+		orgID, deptID, ownerID, req.Name, req.Description, coverColor)
+	if err != nil {
+		return nil, fmt.Errorf("create project: %w", err)
+	}
+	return &model.ProjectDTO{
+		ID:          row.ID.String(),
+		OrgID:       row.OrgID.String(),
+		DeptID:      row.DeptID.String(),
+		OwnerID:     row.OwnerID.String(),
+		Name:        row.Name,
+		Description: row.Description,
+		CoverColor:  row.CoverColor,
+		IsArchived:  row.IsArchived,
+		CreatedAt:   row.CreatedAt,
+		UpdatedAt:   row.UpdatedAt,
+	}, nil
+}
+
+func (s *ProjectService) List(ctx context.Context, orgID, deptID uuid.UUID, archived bool) (*model.ProjectList, error) {
+	type row struct {
+		ID          uuid.UUID `db:"id"`
+		OrgID       uuid.UUID `db:"org_id"`
+		DeptID      uuid.UUID `db:"dept_id"`
+		OwnerID     uuid.UUID `db:"owner_id"`
+		Name        string    `db:"name"`
+		Description *string   `db:"description"`
+		CoverColor  string    `db:"cover_color"`
+		IsArchived  bool      `db:"is_archived"`
+		CreatedAt   time.Time `db:"created_at"`
+		UpdatedAt   time.Time `db:"updated_at"`
+	}
+	var rows []row
+	err := s.db.SelectContext(ctx, &rows,
+		`SELECT id, org_id, dept_id, owner_id, name, description, cover_color,
+		        is_archived, created_at, updated_at
+		 FROM projects
+		 WHERE dept_id=$1 AND is_archived=$2
+		 ORDER BY updated_at DESC`,
+		deptID, archived)
+	if err != nil {
+		return nil, err
+	}
+	projects := make([]model.ProjectDTO, len(rows))
+	for i, r := range rows {
+		projects[i] = model.ProjectDTO{
+			ID:          r.ID.String(),
+			OrgID:       r.OrgID.String(),
+			DeptID:      r.DeptID.String(),
+			OwnerID:     r.OwnerID.String(),
+			Name:        r.Name,
+			Description: r.Description,
+			CoverColor:  r.CoverColor,
+			IsArchived:  r.IsArchived,
+			CreatedAt:   r.CreatedAt,
+			UpdatedAt:   r.UpdatedAt,
+		}
+	}
+	return &model.ProjectList{Projects: projects, Total: len(projects)}, nil
+}
+
+func (s *ProjectService) Get(ctx context.Context, deptID, projectID uuid.UUID) (*model.ProjectDetailDTO, error) {
+	type row struct {
+		ID          uuid.UUID `db:"id"`
+		OrgID       uuid.UUID `db:"org_id"`
+		DeptID      uuid.UUID `db:"dept_id"`
+		OwnerID     uuid.UUID `db:"owner_id"`
+		Name        string    `db:"name"`
+		Description *string   `db:"description"`
+		CoverColor  string    `db:"cover_color"`
+		IsArchived  bool      `db:"is_archived"`
+		CreatedAt   time.Time `db:"created_at"`
+		UpdatedAt   time.Time `db:"updated_at"`
+	}
+	var p row
+	err := s.db.GetContext(ctx, &p,
+		`SELECT id, org_id, dept_id, owner_id, name, description, cover_color,
+		        is_archived, created_at, updated_at
+		 FROM projects WHERE id=$1 AND dept_id=$2`,
+		projectID, deptID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrProjectNotFound
+		}
+		return nil, err
+	}
+
+	var sessions []model.SessionWithCount
+	_ = s.db.SelectContext(ctx, &sessions,
+		`SELECT s.id, s.org_id, s.user_id, s.title, s.is_archived,
+		        (SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id) AS message_count,
+		        s.created_at, s.updated_at
+		 FROM session_project sp
+		 JOIN sessions s ON s.id = sp.session_id
+		 WHERE sp.project_id = $1
+		 ORDER BY sp.added_at DESC`, projectID)
+
+	return &model.ProjectDetailDTO{
+		ProjectDTO: model.ProjectDTO{
+			ID:          p.ID.String(),
+			OrgID:       p.OrgID.String(),
+			DeptID:      p.DeptID.String(),
+			OwnerID:     p.OwnerID.String(),
+			Name:        p.Name,
+			Description: p.Description,
+			CoverColor:  p.CoverColor,
+			IsArchived:  p.IsArchived,
+			CreatedAt:   p.CreatedAt,
+			UpdatedAt:   p.UpdatedAt,
+		},
+		Sessions: sessions,
+	}, nil
+}
+
+func (s *ProjectService) Update(ctx context.Context, deptID, projectID uuid.UUID, req model.UpdateProjectRequest) (*model.ProjectDTO, error) {
+	setClauses := []string{"updated_at=NOW()"}
+	args := []any{}
+	argIdx := 1
+
+	if req.Name != nil {
+		setClauses = append(setClauses, fmt.Sprintf("name=$%d", argIdx))
+		args = append(args, *req.Name)
+		argIdx++
+	}
+	if req.Description != nil {
+		setClauses = append(setClauses, fmt.Sprintf("description=$%d", argIdx))
+		args = append(args, *req.Description)
+		argIdx++
+	}
+	if req.CoverColor != nil {
+		setClauses = append(setClauses, fmt.Sprintf("cover_color=$%d", argIdx))
+		args = append(args, *req.CoverColor)
+		argIdx++
+	}
+	args = append(args, projectID, deptID)
+
+	query := fmt.Sprintf(
+		`UPDATE projects SET %s WHERE id=$%d AND dept_id=$%d
+		 RETURNING id, org_id, dept_id, owner_id, name, description, cover_color,
+		           is_archived, created_at, updated_at`,
+		joinStrings(setClauses, ", "), argIdx, argIdx+1)
+
+	type row struct {
+		ID          uuid.UUID `db:"id"`
+		OrgID       uuid.UUID `db:"org_id"`
+		DeptID      uuid.UUID `db:"dept_id"`
+		OwnerID     uuid.UUID `db:"owner_id"`
+		Name        string    `db:"name"`
+		Description *string   `db:"description"`
+		CoverColor  string    `db:"cover_color"`
+		IsArchived  bool      `db:"is_archived"`
+		CreatedAt   time.Time `db:"created_at"`
+		UpdatedAt   time.Time `db:"updated_at"`
+	}
+	var r row
+	err := s.db.GetContext(ctx, &r, query, args...)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrProjectNotFound
+		}
+		return nil, err
+	}
+	return &model.ProjectDTO{
+		ID:          r.ID.String(),
+		OrgID:       r.OrgID.String(),
+		DeptID:      r.DeptID.String(),
+		OwnerID:     r.OwnerID.String(),
+		Name:        r.Name,
+		Description: r.Description,
+		CoverColor:  r.CoverColor,
+		IsArchived:  r.IsArchived,
+		CreatedAt:   r.CreatedAt,
+		UpdatedAt:   r.UpdatedAt,
+	}, nil
+}
+
+func (s *ProjectService) Archive(ctx context.Context, deptID, projectID uuid.UUID) (*model.ProjectDTO, error) {
+	return s.setArchived(ctx, deptID, projectID, true)
+}
+
+func (s *ProjectService) Unarchive(ctx context.Context, deptID, projectID uuid.UUID) (*model.ProjectDTO, error) {
+	return s.setArchived(ctx, deptID, projectID, false)
+}
+
+func (s *ProjectService) setArchived(ctx context.Context, deptID, projectID uuid.UUID, archived bool) (*model.ProjectDTO, error) {
+	type row struct {
+		ID          uuid.UUID `db:"id"`
+		OrgID       uuid.UUID `db:"org_id"`
+		DeptID      uuid.UUID `db:"dept_id"`
+		OwnerID     uuid.UUID `db:"owner_id"`
+		Name        string    `db:"name"`
+		Description *string   `db:"description"`
+		CoverColor  string    `db:"cover_color"`
+		IsArchived  bool      `db:"is_archived"`
+		CreatedAt   time.Time `db:"created_at"`
+		UpdatedAt   time.Time `db:"updated_at"`
+	}
+	var r row
+	err := s.db.GetContext(ctx, &r,
+		`UPDATE projects SET is_archived=$1, updated_at=NOW()
+		 WHERE id=$2 AND dept_id=$3
+		 RETURNING id, org_id, dept_id, owner_id, name, description, cover_color,
+		           is_archived, created_at, updated_at`,
+		archived, projectID, deptID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrProjectNotFound
+		}
+		return nil, err
+	}
+	return &model.ProjectDTO{
+		ID:          r.ID.String(),
+		OrgID:       r.OrgID.String(),
+		DeptID:      r.DeptID.String(),
+		OwnerID:     r.OwnerID.String(),
+		Name:        r.Name,
+		Description: r.Description,
+		CoverColor:  r.CoverColor,
+		IsArchived:  r.IsArchived,
+		CreatedAt:   r.CreatedAt,
+		UpdatedAt:   r.UpdatedAt,
+	}, nil
+}
+
+func (s *ProjectService) Delete(ctx context.Context, deptID, projectID uuid.UUID) error {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE projects SET is_archived=true, updated_at=NOW() WHERE id=$1 AND dept_id=$2`,
+		projectID, deptID)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return ErrProjectNotFound
+	}
+	return nil
+}
+
+func (s *ProjectService) AddSession(ctx context.Context, projectID, sessionID uuid.UUID) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO session_project(session_id, project_id)
+		 VALUES($1,$2)
+		 ON CONFLICT (session_id, project_id) DO NOTHING`,
+		sessionID, projectID)
+	return err
+}
+
+func (s *ProjectService) RemoveSession(ctx context.Context, projectID, sessionID uuid.UUID) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM session_project WHERE session_id=$1 AND project_id=$2`,
+		sessionID, projectID)
+	return err
+}
+
+func (s *ProjectService) GetProjectsForSession(ctx context.Context, sessionID, deptID uuid.UUID) ([]model.ProjectDTO, error) {
+	type row struct {
+		ID          uuid.UUID `db:"id"`
+		OrgID       uuid.UUID `db:"org_id"`
+		DeptID      uuid.UUID `db:"dept_id"`
+		OwnerID     uuid.UUID `db:"owner_id"`
+		Name        string    `db:"name"`
+		Description *string   `db:"description"`
+		CoverColor  string    `db:"cover_color"`
+		IsArchived  bool      `db:"is_archived"`
+		CreatedAt   time.Time `db:"created_at"`
+		UpdatedAt   time.Time `db:"updated_at"`
+	}
+	var rows []row
+	_ = s.db.SelectContext(ctx, &rows,
+		`SELECT p.id, p.org_id, p.dept_id, p.owner_id, p.name, p.description,
+		        p.cover_color, p.is_archived, p.created_at, p.updated_at
+		 FROM session_project sp
+		 JOIN projects p ON p.id = sp.project_id
+		 WHERE sp.session_id=$1 AND p.dept_id=$2`, sessionID, deptID)
+	result := make([]model.ProjectDTO, len(rows))
+	for i, r := range rows {
+		result[i] = model.ProjectDTO{
+			ID:          r.ID.String(),
+			OrgID:       r.OrgID.String(),
+			DeptID:      r.DeptID.String(),
+			OwnerID:     r.OwnerID.String(),
+			Name:        r.Name,
+			Description: r.Description,
+			CoverColor:  r.CoverColor,
+			IsArchived:  r.IsArchived,
+			CreatedAt:   r.CreatedAt,
+			UpdatedAt:   r.UpdatedAt,
+		}
+	}
+	return result, nil
 }
 
 func joinStrings(parts []string, sep string) string {

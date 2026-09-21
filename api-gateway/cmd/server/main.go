@@ -76,6 +76,7 @@ func main() {
 		deptSvc      *service.DeptService
 		roleSvc      *service.RoleService
 		sessionSvc    *service.SessionService
+		projectSvc    *service.ProjectService
 		auditSvc     *service.AuditService
 		chatH        *handler.ChatHandler
 	)
@@ -85,6 +86,7 @@ func main() {
 		deptSvc     = service.NewDeptService(pool)
 		roleSvc     = service.NewRoleService(pool)
 		sessionSvc  = service.NewSessionService(pool)
+		projectSvc  = service.NewProjectService(pool)
 		auditSvc    = service.NewAuditService(pool)
 	}
 
@@ -96,6 +98,7 @@ func main() {
 	var deptH    *handler.DeptHandler
 	var roleH    *handler.RoleHandler
 	var sessionH *handler.SessionHandler
+	var projectH *handler.ProjectHandler
 	var healthH  *handler.HealthHandler
 
 	if pool != nil {
@@ -104,6 +107,7 @@ func main() {
 		deptH    = handler.NewDeptHandler(deptSvc)
 		roleH    = handler.NewRoleHandler(roleSvc)
 		sessionH = handler.NewSessionHandler(sessionSvc, chatSvc)
+		projectH = handler.NewProjectHandler(projectSvc)
 	}
 	chatH = handler.NewChatHandler(chatSvc, jwtSvc)
 	healthH = handler.NewHealthHandler(chatSvc)
@@ -158,7 +162,7 @@ func main() {
 	}
 
 	// Authenticated API routes
-	if userH != nil && deptH != nil && roleH != nil && sessionH != nil {
+	if userH != nil && deptH != nil && roleH != nil && sessionH != nil && projectH != nil {
 		api := r.PathPrefix("/api").Subrouter()
 		api.Use(jwtMw)
 		api.Use(rlMw)
@@ -177,6 +181,18 @@ func main() {
 		api.HandleFunc("/sessions/{id}", sessionH.Get).Methods(http.MethodGet)
 		api.HandleFunc("/sessions/{id}", sessionH.Update).Methods(http.MethodPatch)
 		api.HandleFunc("/sessions/{id}/messages", sessionH.GetMessages).Methods(http.MethodGet)
+
+		// Projects
+		api.HandleFunc("/projects", projectH.List).Methods(http.MethodGet)
+		api.HandleFunc("/projects", projectH.Create).Methods(http.MethodPost)
+		api.HandleFunc("/projects/{id}", projectH.Get).Methods(http.MethodGet)
+		api.HandleFunc("/projects/{id}", projectH.Update).Methods(http.MethodPut)
+		api.HandleFunc("/projects/{id}", projectH.Delete).Methods(http.MethodDelete)
+		api.HandleFunc("/projects/{id}/archive", projectH.Archive).Methods(http.MethodPost)
+		api.HandleFunc("/projects/{id}/unarchive", projectH.Unarchive).Methods(http.MethodPost)
+		api.HandleFunc("/projects/{id}/sessions", projectH.AddSession).Methods(http.MethodPost)
+		api.HandleFunc("/projects/{id}/sessions/{session_id}", projectH.RemoveSession).Methods(http.MethodDelete)
+		api.HandleFunc("/sessions/{id}/projects", projectH.ListForSession).Methods(http.MethodGet)
 
 		// OpenAI-compatible routes
 		v1 := r.PathPrefix("/v1").Subrouter()

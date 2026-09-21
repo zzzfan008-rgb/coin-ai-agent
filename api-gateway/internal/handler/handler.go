@@ -445,6 +445,299 @@ func (h *HealthHandler) Health(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ProjectHandler handles project endpoints.
+type ProjectHandler struct {
+	svc *service.ProjectService
+}
+
+func NewProjectHandler(svc *service.ProjectService) *ProjectHandler {
+	return &ProjectHandler{svc: svc}
+}
+
+// Create godoc
+// @Summary 创建项目
+// @Tags projects
+// @Accept json
+// @Produce json
+// @Param request body model.CreateProjectRequest true "项目信息"
+// @Success 201 {object} model.ProjectDTO
+// @Router /api/projects [post]
+func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
+	var req model.CreateProjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
+		return
+	}
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "name is required")
+		return
+	}
+	claims := middleware.GetClaims(r.Context())
+	orgID, _ := parseUUID(claims.OrgID)
+	deptID, _ := parseUUID(claims.DeptID)
+	ownerID, _ := parseUUID(claims.Subject)
+
+	proj, err := h.svc.Create(r.Context(), orgID, deptID, ownerID, req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, proj)
+}
+
+// List godoc
+// @Summary 项目列表（部门隔离）
+// @Tags projects
+// @Produce json
+// @Param archived query bool false "仅归档项目" default(false)
+// @Success 200 {object} model.ProjectList
+// @Router /api/projects [get]
+func (h *ProjectHandler) List(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r.Context())
+	orgID, _ := parseUUID(claims.OrgID)
+	deptID, _ := parseUUID(claims.DeptID)
+	archived := r.URL.Query().Get("archived") == "true"
+
+	list, err := h.svc.List(r.Context(), orgID, deptID, archived)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// Get godoc
+// @Summary 获取项目详情（含会话列表）
+// @Tags projects
+// @Produce json
+// @Param id path string true "项目ID"
+// @Success 200 {object} model.ProjectDetailDTO
+// @Failure 404 {object} model.ErrorResponse
+// @Router /api/projects/{id} [get]
+func (h *ProjectHandler) Get(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	projectID, err := parseUUID(vars["id"])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid project id")
+		return
+	}
+	claims := middleware.GetClaims(r.Context())
+	deptID, _ := parseUUID(claims.DeptID)
+
+	detail, err := h.svc.Get(r.Context(), deptID, projectID)
+	if err != nil {
+		if errors.Is(err, service.ErrProjectNotFound) {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "project not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+// Update godoc
+// @Summary 更新项目
+// @Tags projects
+// @Accept json
+// @Produce json
+// @Param id path string true "项目ID"
+// @Param request body model.UpdateProjectRequest true "更新信息"
+// @Success 200 {object} model.ProjectDTO
+// @Router /api/projects/{id} [put]
+func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	projectID, err := parseUUID(vars["id"])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid project id")
+		return
+	}
+	var req model.UpdateProjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
+		return
+	}
+	claims := middleware.GetClaims(r.Context())
+	deptID, _ := parseUUID(claims.DeptID)
+
+	proj, err := h.svc.Update(r.Context(), deptID, projectID, req)
+	if err != nil {
+		if errors.Is(err, service.ErrProjectNotFound) {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "project not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, proj)
+}
+
+// Delete godoc
+// @Summary 删除项目（软删除）
+// @Tags projects
+// @Param id path string true "项目ID"
+// @Success 204
+// @Router /api/projects/{id} [delete]
+func (h *ProjectHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	projectID, err := parseUUID(vars["id"])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid project id")
+		return
+	}
+	claims := middleware.GetClaims(r.Context())
+	deptID, _ := parseUUID(claims.DeptID)
+
+	if err := h.svc.Delete(r.Context(), deptID, projectID); err != nil {
+		if errors.Is(err, service.ErrProjectNotFound) {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "project not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Archive godoc
+// @Summary 归档项目
+// @Tags projects
+// @Param id path string true "项目ID"
+// @Success 200 {object} model.ProjectDTO
+// @Router /api/projects/{id}/archive [post]
+func (h *ProjectHandler) Archive(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	projectID, err := parseUUID(vars["id"])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid project id")
+		return
+	}
+	claims := middleware.GetClaims(r.Context())
+	deptID, _ := parseUUID(claims.DeptID)
+
+	proj, err := h.svc.Archive(r.Context(), deptID, projectID)
+	if err != nil {
+		if errors.Is(err, service.ErrProjectNotFound) {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "project not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, proj)
+}
+
+// Unarchive godoc
+// @Summary 取消归档
+// @Tags projects
+// @Param id path string true "项目ID"
+// @Success 200 {object} model.ProjectDTO
+// @Router /api/projects/{id}/unarchive [post]
+func (h *ProjectHandler) Unarchive(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	projectID, err := parseUUID(vars["id"])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid project id")
+		return
+	}
+	claims := middleware.GetClaims(r.Context())
+	deptID, _ := parseUUID(claims.DeptID)
+
+	proj, err := h.svc.Unarchive(r.Context(), deptID, projectID)
+	if err != nil {
+		if errors.Is(err, service.ErrProjectNotFound) {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "project not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, proj)
+}
+
+// AddSession godoc
+// @Summary 将会话加入项目
+// @Tags projects
+// @Accept json
+// @Param id path string true "项目ID"
+// @Param request body model.AddSessionToProjectRequest true "会话ID"
+// @Success 204
+// @Router /api/projects/{id}/sessions [post]
+func (h *ProjectHandler) AddSession(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	projectID, err := parseUUID(vars["id"])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid project id")
+		return
+	}
+	var req model.AddSessionToProjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
+		return
+	}
+	if req.SessionID == "" {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "session_id is required")
+		return
+	}
+	sessionID, _ := parseUUID(req.SessionID)
+	if err := h.svc.AddSession(r.Context(), projectID, sessionID); err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// RemoveSession godoc
+// @Summary 从项目移除会话
+// @Tags projects
+// @Param id path string true "项目ID"
+// @Param session_id path string true "会话ID"
+// @Success 204
+// @Router /api/projects/{id}/sessions/{session_id} [delete]
+func (h *ProjectHandler) RemoveSession(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	projectID, err := parseUUID(vars["id"])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid project id")
+		return
+	}
+	sessionID, err := parseUUID(vars["session_id"])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid session id")
+		return
+	}
+	if err := h.svc.RemoveSession(r.Context(), projectID, sessionID); err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ListForSession godoc
+// @Summary 查询会话所属的项目
+// @Tags projects
+// @Produce json
+// @Param id path string true "会话ID"
+// @Success 200
+// @Router /api/sessions/{id}/projects [get]
+func (h *ProjectHandler) ListForSession(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID, err := parseUUID(vars["id"])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid session id")
+		return
+	}
+	claims := middleware.GetClaims(r.Context())
+	deptID, _ := parseUUID(claims.DeptID)
+
+	projects, err := h.svc.GetProjectsForSession(r.Context(), sessionID, deptID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"projects": projects})
+}
+
 // Utility helpers
 
 func parseUUID(s string) (uuid.UUID, error) {

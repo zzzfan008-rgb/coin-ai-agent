@@ -22,6 +22,25 @@ export interface MockSession {
   updated_at: string
 }
 
+export interface MockProject {
+  id: string
+  org_id: string
+  dept_id: string
+  owner_id: string
+  name: string
+  description: string | null
+  cover_color: string
+  is_archived: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface MockSessionProject {
+  session_id: string
+  project_id: string
+  added_at: string
+}
+
 export interface MockMessage {
   id: string
   session_id: string
@@ -97,5 +116,54 @@ export const messages: MockMessage[] = [
       '你好，我是 **Fashion AI 设计助手** 👋\n\n我可以帮你完成：\n\n- 🔍 **面料查询**：成分、适用季节、保养方式\n- 🎨 **色彩搭配**：配色方案、流行色分析\n- 💡 **款式灵感**：创意生成、款式变体\n\n试试在右侧面板选择一个 Skill，然后向我提问吧！',
     model: 'fashion-ai-default',
     created_at: now,
+  },
+]
+
+// ── 种子项目 + 关联 ─────────────────────────────────────────────────────────
+
+export const projects: MockProject[] = [
+  {
+    id: 'proj-demo-0001',
+    org_id: 'org-demo-0001',
+    dept_id: 'dept-demo-0001',
+    owner_id: 'u-demo-0001',
+    name: '2027 春夏系列',
+    description: '春夏季度灵感与面料调研',
+    cover_color: '#6366F1',
+    is_archived: false,
+    created_at: now,
+    updated_at: now,
+  },
+  {
+    id: 'proj-demo-0002',
+    org_id: 'org-demo-0001',
+    dept_id: 'dept-demo-0001',
+    owner_id: 'u-demo-0001',
+    name: '可持续面料专题',
+    description: null,
+    cover_color: '#10B981',
+    is_archived: false,
+    created_at: now,
+    updated_at: now,
+  },
+  {
+    id: 'proj-demo-0003',
+    org_id: 'org-demo-0001',
+    dept_id: 'dept-demo-0001',
+    owner_id: 'u-demo-0001',
+    name: '2026 秋冬系列（已归档）',
+    description: '历史归档项目',
+    cover_color: '#F59E0B',
+    is_archived: true,
+    created_at: now,
+    updated_at: now,
+  },
+]
+
+export const sessionProjects: MockSessionProject[] = [
+  {
+    session_id: 'sess-demo-0001',
+    project_id: 'proj-demo-0001',
+    added_at: now,
   },
 ]

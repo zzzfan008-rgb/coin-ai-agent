@@ -52,3 +52,6 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[dev-dependencies]
+wiremock = "0.5"

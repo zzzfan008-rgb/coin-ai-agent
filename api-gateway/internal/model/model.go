@@ -170,16 +170,16 @@ type UpdateSessionRequest struct {
 }
 
 type SessionWithCount struct {
-	ID            string    `json:"id"`
-	OrgID         string    `json:"org_id"`
-	UserID        string    `json:"user_id"`
-	Title         string    `json:"title"`
-	Model         string    `json:"model"`
-	IsArchived    bool      `json:"is_archived"`
-	LastMessageAt *time.Time `json:"last_message_at"`
-	MessageCount  int       `json:"message_count"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID            string     `db:"id" json:"id"`
+	OrgID         string     `db:"org_id" json:"org_id"`
+	UserID        string     `db:"user_id" json:"user_id"`
+	Title         string     `db:"title" json:"title"`
+	Model         string     `db:"model" json:"model"`
+	IsArchived    bool       `db:"is_archived" json:"is_archived"`
+	LastMessageAt *time.Time `db:"last_message_at" json:"last_message_at"`
+	MessageCount  int        `db:"message_count" json:"message_count"`
+	CreatedAt     time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt     time.Time  `db:"updated_at" json:"updated_at"`
 }
 
 type SessionList struct {
@@ -201,6 +201,47 @@ type MessageDTO struct {
 	FinishReason string  `json:"finish_reason"`
 	TokenCount int       `json:"token_count"`
 	CreatedAt  time.Time `json:"created_at"`
+}
+
+// ─── Projects ─────────────────────────────────────────────────────────────────
+
+type CreateProjectRequest struct {
+	Name       string  `json:"name" validate:"required"`
+	Description *string `json:"description"`
+	CoverColor string  `json:"cover_color"`
+}
+
+type UpdateProjectRequest struct {
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+	CoverColor  *string `json:"cover_color"`
+}
+
+type AddSessionToProjectRequest struct {
+	SessionID string `json:"session_id" validate:"required"`
+}
+
+type ProjectDTO struct {
+	ID          string    `json:"id"`
+	OrgID       string    `json:"org_id"`
+	DeptID      string    `json:"dept_id"`
+	OwnerID     string    `json:"owner_id"`
+	Name        string   `json:"name"`
+	Description *string   `json:"description"`
+	CoverColor  string   `json:"cover_color"`
+	IsArchived  bool     `json:"is_archived"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type ProjectDetailDTO struct {
+	ProjectDTO
+	Sessions []SessionWithCount `json:"sessions"`
+}
+
+type ProjectList struct {
+	Projects []ProjectDTO `json:"projects"`
+	Total    int           `json:"total"`
 }
 
 // ─── Users ───────────────────────────────────────────────────────────────────

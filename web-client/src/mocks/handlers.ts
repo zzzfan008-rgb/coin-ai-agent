@@ -3,9 +3,12 @@ import {
   users,
   sessions,
   messages,
+  projects,
+  sessionProjects,
   newId,
   fakeJwt,
   type MockUser,
+  type MockProject,
 } from './data'
 
 // ── 工具函数 ────────────────────────────────────────────────────────────────
@@ -416,4 +419,221 @@ export const handlers = [
       next_cursor: null,
     })
   }),
+
+  // ── 项目列表（部门隔离） ──────────────────────────────────────────────────
+  http.get('*/api/projects', ({ request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+
+    const url = new URL(request.url)
+    const archived = url.searchParams.get('archived') === 'true'
+    const list = projects.filter(
+      (p) => p.dept_id === user.dept_id && p.is_archived === archived,
+    )
+    return HttpResponse.json({ projects: list, total: list.length })
+  }),
+
+  // ── 创建项目 ─────────────────────────────────────────────────────────────
+  http.post('*/api/projects', async ({ request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+
+    const body = (await request.json().catch(() => null)) as {
+      name?: string
+      description?: string
+      cover_color?: string
+    } | null
+    if (!body || !body.name) {
+      return errorResponse(400, 'bad_request', '项目名称不能为空')
+    }
+
+    const ts = new Date().toISOString()
+    const project: MockProject = {
+      id: newId(),
+      org_id: user.org_id,
+      dept_id: user.dept_id,
+      owner_id: user.id,
+      name: body.name,
+      description: body.description ?? null,
+      cover_color: body.cover_color || '#6366F1',
+      is_archived: false,
+      created_at: ts,
+      updated_at: ts,
+    }
+    projects.push(project)
+    return HttpResponse.json(project, { status: 201 })
+  }),
+
+  // ── 项目详情（含会话） ────────────────────────────────────────────────────
+  http.get('*/api/projects/:id', ({ params, request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+
+    const project = findProject(user, String(params.id))
+    if (!project) return errorResponse(404, 'not_found', '项目不存在')
+
+    return HttpResponse.json({
+      ...project,
+      sessions: sessionsInProject(project.id),
+    })
+  }),
+
+  // ── 更新项目 ─────────────────────────────────────────────────────────────
+  http.put('*/api/projects/:id', async ({ params, request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+
+    const project = findProject(user, String(params.id))
+    if (!project) return errorResponse(404, 'not_found', '项目不存在')
+
+    const body = (await request.json()) as {
+      name?: string
+      description?: string
+      cover_color?: string
+    }
+    if (typeof body.name === 'string') project.name = body.name
+    if (typeof body.description === 'string') project.description = body.description
+    if (typeof body.cover_color === 'string') project.cover_color = body.cover_color
+    project.updated_at = new Date().toISOString()
+
+    return HttpResponse.json(project)
+  }),
+
+  // ── 删除项目（软删除） ───────────────────────────────────────────────────
+  http.delete('*/api/projects/:id', ({ params, request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+
+    const project = findProject(user, String(params.id))
+    if (!project) return errorResponse(404, 'not_found', '项目不存在')
+
+    project.is_archived = true
+    project.updated_at = new Date().toISOString()
+    return new Response(null, { status: 204 })
+  }),
+
+  // ── 归档 / 取消归档 ─────────────────────────────────────────────────────
+  http.post('*/api/projects/:id/archive', ({ params, request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+
+    const project = findProject(user, String(params.id))
+    if (!project) return errorResponse(404, 'not_found', '项目不存在')
+
+    project.is_archived = true
+    project.updated_at = new Date().toISOString()
+    return HttpResponse.json(project)
+  }),
+
+  http.post('*/api/projects/:id/unarchive', ({ params, request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+
+    const project = findProject(user, String(params.id))
+    if (!project) return errorResponse(404, 'not_found', '项目不存在')
+
+    project.is_archived = false
+    project.updated_at = new Date().toISOString()
+    return HttpResponse.json(project)
+  }),
+
+  // ── 会话加入项目 ─────────────────────────────────────────────────────────
+  http.post('*/api/projects/:id/sessions', async ({ params, request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+
+    const project = findProject(user, String(params.id))
+    if (!project) return errorResponse(404, 'not_found', '项目不存在')
+
+    const body = (await request.json().catch(() => null)) as {
+      session_id?: string
+    } | null
+    if (!body?.session_id) {
+      return errorResponse(400, 'bad_request', 'session_id 不能为空')
+    }
+    const session = sessions.find(
+      (s) => s.id === body.session_id && s.user_id === user.id,
+    )
+    if (!session) return errorResponse(404, 'not_found', '会话不存在')
+
+    const exists = sessionProjects.some(
+      (sp) => sp.session_id === session.id && sp.project_id === project.id,
+    )
+    if (!exists) {
+      sessionProjects.push({
+        session_id: session.id,
+        project_id: project.id,
+        added_at: new Date().toISOString(),
+      })
+    }
+    return new Response(null, { status: 204 })
+  }),
+
+  // ── 从项目移除会话 ───────────────────────────────────────────────────────
+  http.delete('*/api/projects/:id/sessions/:session_id', ({ params, request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+
+    const project = findProject(user, String(params.id))
+    if (!project) return errorResponse(404, 'not_found', '项目不存在')
+
+    const idx = sessionProjects.findIndex(
+      (sp) =>
+        sp.project_id === project.id && sp.session_id === String(params.session_id),
+    )
+    if (idx < 0) return errorResponse(404, 'not_found', '关联不存在')
+    sessionProjects.splice(idx, 1)
+    return new Response(null, { status: 204 })
+  }),
+
+  // ── 会话所属项目 ─────────────────────────────────────────────────────────
+  http.get('*/api/sessions/:id/projects', ({ params, request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+
+    const list = projects.filter(
+      (p) =>
+        p.dept_id === user.dept_id &&
+        sessionProjects.some(
+          (sp) => sp.session_id === String(params.id) && sp.project_id === p.id,
+        ),
+    )
+    return HttpResponse.json({ projects: list })
+  }),
 ]
+
+// ── 项目工具函数 ─────────────────────────────────────────────────────────────
+
+function findProject(user: MockUser, id: string): MockProject | undefined {
+  return projects.find((p) => p.id === id && p.dept_id === user.dept_id)
+}
+
+interface ProjectSessionRow {
+  id: string
+  title: string
+  is_archived: boolean
+  message_count: number
+  created_at: string
+  updated_at: string
+  added_at: string
+}
+
+function sessionsInProject(projectId: string): ProjectSessionRow[] {
+  return sessionProjects
+    .filter((sp) => sp.project_id === projectId)
+    .map((sp) => {
+      const s = sessions.find((x) => x.id === sp.session_id)
+      if (!s) return null
+      return {
+        id: s.id,
+        title: s.title,
+        is_archived: s.is_archived,
+        message_count: messages.filter((m) => m.session_id === s.id).length,
+        created_at: s.created_at,
+        updated_at: s.updated_at,
+        added_at: sp.added_at,
+      }
+    })
+    .filter((x): x is ProjectSessionRow => x !== null)
+    .sort((a, b) => b.added_at.localeCompare(a.added_at))
+}

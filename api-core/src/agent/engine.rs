@@ -19,6 +19,14 @@ use crate::llm::LlmClient;
 use crate::middleware;
 use crate::session::SessionStore;
 
+/// Token usage returned from an agent turn.
+#[derive(Debug, Clone, Default)]
+pub struct TurnUsage {
+    pub prompt_tokens: usize,
+    pub completion_tokens: usize,
+    pub total_tokens: usize,
+}
+
 use super::rag::RagRetriever;
 
 #[derive(Debug, Clone)]
@@ -57,14 +65,17 @@ impl AgentEngine {
     }
 
     /// Run one full turn until the LLM produces a message with no tool calls.
+    /// Returns the assistant content and aggregated token usage.
     pub async fn run_turn(
         &self,
         messages: &[ChatMessage],
+        model: Option<&str>,
         tools: Option<&[ToolDefinition]>,
         user_ctx: &UserContext,
         knowledge_collections: Option<&[String]>,
-    ) -> Result<String> {
+    ) -> Result<(String, TurnUsage)> {
         let mut conversation: Vec<ChatMessage> = messages.to_vec();
+        let mut total_usage = TurnUsage::default();
 
         for turn in 1..=self.config.max_turns {
             self.maybe_inject_rag_context(&mut conversation, knowledge_collections)
@@ -74,11 +85,18 @@ impl AgentEngine {
                 .llm
                 .chat(
                     &conversation,
+                    model,
                     self.config.temperature,
                     self.config.max_tokens,
                     tools,
                 )
                 .await?;
+
+            if let Some(usage) = response.usage {
+                total_usage.prompt_tokens += usage.prompt_tokens;
+                total_usage.completion_tokens += usage.completion_tokens;
+                total_usage.total_tokens += usage.total_tokens;
+            }
 
             let choice = response
                 .choices
@@ -88,7 +106,7 @@ impl AgentEngine {
 
             let assistant = choice.message;
             let Some(tool_calls) = assistant.tool_calls else {
-                return Ok(assistant.content.unwrap_or_default());
+                return Ok((assistant.content.unwrap_or_default(), total_usage));
             };
 
             tracing::info!(turn, n = tool_calls.len(), "LLM requested tool calls");
@@ -161,7 +179,7 @@ async fn execute_single_tool(tool_call: &ToolCall, user_ctx: &UserContext) -> Re
     middleware::pre_tool_call_check(user_ctx, &tool_name, &arguments).await?;
 
     tracing::info!(tool = %tool_name, "Executing tool");
-    let content = crate::tool::execute_tool(&tool_name, &arguments).await?;
+    let content = crate::tool::execute_tool(&tool_name, &arguments, user_ctx).await?;
 
     Ok(ToolResult {
         tool_call_id: tool_call.id.clone(),

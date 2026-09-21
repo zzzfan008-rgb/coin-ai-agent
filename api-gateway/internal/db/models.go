@@ -122,18 +122,23 @@ type Message struct {
 
 // Project represents a fashion collection project.
 type Project struct {
-	ID             uuid.UUID       `db:"id" json:"id"`
-	OrgID          uuid.UUID       `db:"org_id" json:"org_id"`
-	DeptID         uuid.UUID       `db:"dept_id" json:"dept_id"`
-	UserID         uuid.UUID       `db:"user_id" json:"user_id"`
-	Name           string          `db:"name" json:"name"`
-	Description    *string         `db:"description" json:"description"`
-	Season         *string         `db:"season" json:"season"`
-	CollectionYear *int            `db:"collection_year" json:"collection_year"`
-	Tags           json.RawMessage `db:"tags" json:"tags"`
-	IsArchived     bool            `db:"is_archived" json:"is_archived"`
-	CreatedAt      time.Time       `db:"created_at" json:"created_at"`
-	UpdatedAt      time.Time       `db:"updated_at" json:"updated_at"`
+	ID          uuid.UUID  `db:"id" json:"id"`
+	OrgID       uuid.UUID  `db:"org_id" json:"org_id"`
+	DeptID      uuid.UUID  `db:"dept_id" json:"dept_id"`
+	OwnerID     uuid.UUID  `db:"owner_id" json:"owner_id"`
+	Name        string     `db:"name" json:"name"`
+	Description  *string    `db:"description" json:"description"`
+	CoverColor  string     `db:"cover_color" json:"cover_color"`
+	IsArchived  bool       `db:"is_archived" json:"is_archived"`
+	CreatedAt   time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at"`
+}
+
+// SessionProject represents a session-project membership.
+type SessionProject struct {
+	SessionID uuid.UUID `db:"session_id" json:"session_id"`
+	ProjectID uuid.UUID `db:"project_id" json:"project_id"`
+	AddedAt   time.Time `db:"added_at" json:"added_at"`
 }
 
 // KnowledgeCollection represents a vector knowledge base.

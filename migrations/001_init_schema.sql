@@ -222,12 +222,10 @@ CREATE TABLE projects (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     org_id          UUID        NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
     dept_id         UUID        NOT NULL REFERENCES depts(id) ON DELETE CASCADE,
-    user_id         UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    owner_id        UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name            VARCHAR(255) NOT NULL,
     description     TEXT,
-    season          VARCHAR(50),
-    collection_year INT,
-    tags            JSONB       NOT NULL DEFAULT '[]',
+    cover_color     VARCHAR(7)  NOT NULL DEFAULT '#6366F1',
     is_archived     BOOLEAN     NOT NULL DEFAULT false,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -235,7 +233,7 @@ CREATE TABLE projects (
     CONSTRAINT uq_project_name_org UNIQUE (org_id, name)
 );
 
-COMMENT ON TABLE projects IS '服装项目/系列（季节+年份分组）';
+COMMENT ON TABLE projects IS '服装项目/系列（按部门隔离）';
 
 -- -----------------------------------------------------------------------------
 -- 13. 知识库集合表

@@ -47,6 +47,8 @@ pub struct ExtraBody {
     pub skill_ids: Option<Vec<String>>,
     pub mcp_server_ids: Option<Vec<String>>,
     pub knowledge_collections: Option<Vec<String>>,
+    /// Override the model for this request (e.g. "deepseek-chat").
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -57,6 +59,9 @@ pub struct UserContext {
     pub role: String,
     #[serde(default)]
     pub ip_address: Option<String>,
+    /// Phase 1B: flat list of permission strings, e.g. ["skill:fabric-query", "tool:search_fabric"]
+    #[serde(default)]
+    pub extra_permissions: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -118,14 +123,19 @@ pub struct SkillExecuteResponse {
 
 pub async fn health(State(state): State<AppState>) -> Json<Value> {
     let db_ok = state.session_store.health_check().await.unwrap_or(false);
-    let llm_ok = state.llm_client.health_check().await;
+    let all_llm = state.llm_client.health_check_all().await;
+    let default_llm = all_llm
+        .get(&state.config.llm_provider)
+        .copied()
+        .unwrap_or(false);
 
     Json(serde_json::json!({
         "status": if db_ok { "ok" } else { "degraded" },
         "version": env!("CARGO_PKG_VERSION"),
         "services": {
             "database": if db_ok { "ok" } else { "down" },
-            "llm": if llm_ok { "ok" } else { "down" },
+            "llm": if default_llm { "ok" } else { "down" },
+            "llm_providers": all_llm,
         }
     }))
 }
@@ -135,9 +145,9 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
 pub async fn chat_completions(
     State(state): State<AppState>,
     Json(req): Json<CoreChatRequest>,
-) -> Result<Response, crate::error::AppError> {
+) -> Response {
     if req.stream {
-        return Ok(stream_chat(state, req).await);
+        return stream_chat(state, req).await;
     }
 
     let engine = AgentEngine::new(
@@ -147,35 +157,106 @@ pub async fn chat_completions(
         None,
     );
 
+    let model = req
+        .extra_body
+        .as_ref()
+        .and_then(|b| b.model.clone())
+        .or_else(|| {
+            if req.model.is_empty() || req.model == "__default__" {
+                None
+            } else {
+                Some(req.model.clone())
+            }
+        });
+
     let collections = req
         .extra_body
         .as_ref()
         .and_then(|b| b.knowledge_collections.clone());
-    let reply = engine
-        .run_turn(&req.messages, None, &req.user_context, collections.as_deref())
-        .await?;
+
+    // Optional session for persisting the assistant reply + token usage.
+    let session_id = req
+        .extra_body
+        .as_ref()
+        .and_then(|b| b.session_id.clone());
+
+    let (reply, usage) = match engine
+        .run_turn(
+            &req.messages,
+            model.as_deref(),
+            None,
+            &req.user_context,
+            collections.as_deref(),
+        )
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => return e.into_response(),
+    };
+
+    let resolved_model = model
+        .as_deref()
+        .or_else(|| {
+            if state.config.llm_provider == "deepseek" {
+                Some(state.config.deepseek_model.as_str())
+            } else {
+                Some(state.config.minimax_model.as_str())
+            }
+        })
+        .unwrap_or("unknown");
+
+    // Persist the assistant reply with token usage when a session is given.
+    // A persistence failure is logged but does not fail the request — the
+    // caller already has their answer.
+    if let Some(ref sid) = session_id {
+        if let Ok(session_uuid) = Uuid::parse_str(sid) {
+            if let Err(e) = state
+                .session_store
+                .save_message(
+                    session_uuid,
+                    "assistant",
+                    &reply,
+                    Some(resolved_model),
+                    Some("stop"),
+                    Some(usage.total_tokens as i32),
+                    Some(usage.prompt_tokens as i32),
+                    Some(usage.completion_tokens as i32),
+                    None,
+                )
+                .await
+            {
+                tracing::warn!("Failed to persist assistant message tokens: {e}");
+            }
+        } else {
+            tracing::warn!("Invalid session_id in extra_body: {sid}");
+        }
+    }
 
     let response = CoreChatResponse {
         id: format!("chatcmpl-{}", Uuid::new_v4()),
         object: "chat.completion".to_string(),
         created: Utc::now().timestamp(),
-        model: active_model(&state),
+        model: resolved_model.to_string(),
         choices: vec![serde_json::json!({
             "index": 0,
             "message": {"role": "assistant", "content": reply},
             "finish_reason": "stop"
         })],
-        usage: serde_json::json!({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+        usage: serde_json::json!({
+            "prompt_tokens": usage.prompt_tokens,
+            "completion_tokens": usage.completion_tokens,
+            "total_tokens": usage.total_tokens
+        }),
     };
 
-    Ok(Json(response).into_response())
+    Json(response).into_response()
 }
 
 pub async fn chat_stream(
     State(state): State<AppState>,
     Json(req): Json<CoreChatRequest>,
-) -> Result<Response, crate::error::AppError> {
-    Ok(stream_chat(state, req).await)
+) -> Response {
+    stream_chat(state, req).await
 }
 
 /// Build the SSE response. LLM chunks are pushed through a broadcast channel
@@ -188,9 +269,22 @@ async fn stream_chat(state: Arc<AppServices>, req: CoreChatRequest) -> Response 
     let temperature = req.temperature;
     let max_tokens = req.max_tokens;
 
+    // Resolve model: extra_body.model overrides the top-level model field.
+    let model = req
+        .extra_body
+        .as_ref()
+        .and_then(|b| b.model.clone())
+        .or_else(|| {
+            if req.model.is_empty() || req.model == "__default__" {
+                None
+            } else {
+                Some(req.model)
+            }
+        });
+
     tokio::spawn(async move {
         let stream = match llm
-            .chat_streaming(&messages, temperature, max_tokens, None)
+            .chat_streaming(&messages, model.as_deref(), temperature, max_tokens, None)
             .await
         {
             Ok(s) => s,
@@ -303,28 +397,86 @@ pub async fn save_message(
 
 // ── Skills ─────────────────────────────────────────────────────────────────────
 
-pub async fn list_skills() -> Json<Value> {
-    // Phase 1B: delegate to SkillRegistry loaded from skills/
-    Json(serde_json::json!({ "skills": [] }))
+pub async fn list_skills() -> Json<serde_json::Value> {
+    let guard = crate::skill_engine::SKILL_ENGINE
+        .read()
+        .expect("SKILL_ENGINE poisoned");
+    match guard.as_ref() {
+        Some(engine) => {
+            let skills: Vec<_> = engine
+                .list_skills()
+                .into_iter()
+                .map(|s| serde_json::json!({
+                    "id": s.id,
+                    "name": s.name,
+                    "version": s.version,
+                    "description": s.description,
+                    "tools": s.tools
+                }))
+                .collect();
+            Json(serde_json::json!({ "skills": skills }))
+        }
+        None => Json(serde_json::json!({ "skills": [], "error": "Skill engine not initialised" })),
+    }
 }
 
 pub async fn execute_skill(
     Json(req): Json<SkillExecuteRequest>,
-) -> Result<Json<SkillExecuteResponse>, crate::error::AppError> {
+) -> Response {
+    use crate::skill_engine::{check_skill_permission, execute_skill as exec_skill};
+
     let started = std::time::Instant::now();
-    let result = serde_json::json!({
-        "status": "stub",
-        "skillId": req.skill_id,
-        "toolName": req.tool_name,
-        "message": "Skill execution stub — Phase 1B"
-    });
-    Ok(Json(SkillExecuteResponse {
+
+    // Clone skill metadata then drop the read guard BEFORE any await,
+    // because std::sync::RwLockReadGuard is !Send.
+    let skill_meta = {
+        let engine_guard = match crate::skill_engine::SKILL_ENGINE.read() {
+            Ok(g) => g,
+            Err(_) => {
+                return crate::error::AppError::Internal("SKILL_ENGINE poisoned".into())
+                    .into_response()
+            }
+        };
+        let engine = match engine_guard.as_ref() {
+            Some(e) => e,
+            None => {
+                return crate::error::AppError::Internal("SKILL_ENGINE not initialised".into())
+                    .into_response()
+            }
+        };
+        match engine.get_skill(&req.skill_id) {
+            Some(s) => s.clone(),
+            None => {
+                return crate::error::AppError::NotFound(format!(
+                    "Skill '{}' not found",
+                    req.skill_id
+                ))
+                .into_response()
+            }
+        }
+    }; // guard dropped here
+
+    // Permission gate — returns 403 if user lacks skill:{id}
+    if let Err(e) = check_skill_permission(&req.user_context, &skill_meta) {
+        return e.into_response();
+    }
+
+    // Execute
+    let result = match exec_skill(&skill_meta, &req.tool_name, &req.parameters).await {
+        Ok(r) => r,
+        Err(e) => {
+            return crate::error::AppError::SkillError(e.to_string()).into_response()
+        }
+    };
+
+    Json(SkillExecuteResponse {
         skill_id: req.skill_id,
         tool_name: req.tool_name,
         result,
         tokens_used: 0,
         duration_ms: started.elapsed().as_millis() as i64,
-    }))
+    })
+    .into_response()
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────

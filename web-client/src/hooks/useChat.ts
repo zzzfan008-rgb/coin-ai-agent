@@ -15,7 +15,7 @@ function tempId(): string {
   return `temp-${Date.now()}-${tempSeq}`
 }
 
-export function useChat() {
+export function useChat(initialSessionId?: string) {
   const [sessions, setSessions] = useState<Session[]>([])
   const [currentSession, setCurrentSession] = useState<Session | null>(null)
   const [messages, setMessages] = useState<SessionMessage[]>([])
@@ -26,19 +26,35 @@ export function useChat() {
 
   const abortRef = useRef<AbortController | null>(null)
 
-  // ── 初始化：加载会话列表，无会话则自动新建 ─────────────────────────────
+  const loadSession = useCallback(
+    async (s: Session) => {
+      setError(null)
+      setCurrentSession(s)
+      try {
+        const { messages: msgs } = await listMessages(s.id)
+        setMessages(msgs)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : '消息加载失败')
+      }
+    },
+    [],
+  )
+
+  // ── 初始化：加载会话列表，选中指定/首个会话，无会话则自动新建 ────────────
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
         const { sessions: list } = await listSessions()
         if (cancelled) return
-        if (list.length > 0) {
-          setSessions(list)
-          const first = list[0]
-          setCurrentSession(first)
-          const { messages: msgs } = await listMessages(first.id)
-          if (!cancelled) setMessages(msgs)
+        setSessions(list)
+
+        const target =
+          (initialSessionId && list.find((s) => s.id === initialSessionId)) ||
+          list[0]
+
+        if (target) {
+          await loadSession(target)
         } else {
           const s = await createSession()
           if (!cancelled) {
@@ -56,7 +72,17 @@ export function useChat() {
     return () => {
       cancelled = true
     }
+    // 仅在挂载时执行；后续路由切换由下面的 effect 处理
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // ── 路由驱动的会话切换（/sessions/:id） ──────────────────────────────────
+  useEffect(() => {
+    if (!loaded || !initialSessionId) return
+    if (initialSessionId === currentSession?.id) return
+    const target = sessions.find((s) => s.id === initialSessionId)
+    if (target) void loadSession(target)
+  }, [initialSessionId, loaded, sessions, currentSession, loadSession])
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -71,16 +97,9 @@ export function useChat() {
   const selectSession = useCallback(
     async (session: Session) => {
       if (isStreaming) return
-      setError(null)
-      setCurrentSession(session)
-      try {
-        const { messages: msgs } = await listMessages(session.id)
-        setMessages(msgs)
-      } catch (e) {
-        setError(e instanceof Error ? e.message : '消息加载失败')
-      }
+      await loadSession(session)
     },
-    [isStreaming],
+    [isStreaming, loadSession],
   )
 
   const newSession = useCallback(async () => {
@@ -91,8 +110,10 @@ export function useChat() {
       setSessions((prev) => [s, ...prev])
       setCurrentSession(s)
       setMessages([])
+      return s
     } catch (e) {
       setError(e instanceof Error ? e.message : '创建会话失败')
+      return null
     }
   }, [isStreaming])
 
