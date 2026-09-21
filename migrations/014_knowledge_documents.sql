@@ -29,11 +29,10 @@ COMMENT ON TABLE knowledge_documents IS '管理员上传的文档，支持软删
 COMMENT ON COLUMN knowledge_documents.file_path IS 'MinIO 路径，格式: knowledge/{org_id}/{uuid}.{ext}';
 COMMENT ON COLUMN knowledge_documents.status IS 'pending=待处理 processing=解析中 ready=已就绪 failed=失败 deleted=软删除';
 
--- 索引
-CREATE INDEX idx_kb_docs_org_dept   ON knowledge_documents(org_id, dept_id);
-CREATE INDEX idx_kb_docs_status     ON knowledge_documents(status);
-CREATE INDEX idx_kb_docs_uploaded   ON knowledge_documents(org_id, uploaded_at DESC);
-CREATE INDEX idx_kb_docs_dept_status ON knowledge_documents(dept_id, status) WHERE deleted_at IS NULL;
+-- 索引（幂等）
+CREATE INDEX IF NOT EXISTS idx_kb_docs_org_dept   ON knowledge_documents(org_id, dept_id);
+CREATE INDEX IF NOT EXISTS idx_kb_docs_status     ON knowledge_documents(status);
+CREATE INDEX IF NOT EXISTS idx_kb_docs_uploaded   ON knowledge_documents(org_id, uploaded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_kb_docs_dept_status ON knowledge_documents(dept_id, status) WHERE deleted_at IS NULL;
 
--- 迁移记录
-INSERT INTO schema_migrations (version, dirty, applied_at) VALUES (14, false, NOW());
+-- schema_migrations 版本行由迁移运行器在事务提交时写入，此处不插入。

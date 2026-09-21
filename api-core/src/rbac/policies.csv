@@ -12,5 +12,8 @@ p, *, designer, *, skill:fabric-query, execute
 p, *, designer, *, skill:color-matching, execute
 p, *, designer, *, skill:style-inspiration, execute
 
+# Designer — can invoke allowed enterprise MCP tools (T-016).
+p, *, designer, *, mcp:local-mock/fabric_search_db, invoke
+
 # Viewer — read-only access to conversation data.
 p, *, viewer, *, data:conversations, read

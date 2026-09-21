@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
+	"log/slog"
+	"os"
 
 	"github.com/joho/godotenv"
 
@@ -11,6 +12,11 @@ import (
 	"fashionai/api-gateway/internal/db"
 )
 
+// 一键迁移入口：顺序执行 migrations/ 目录全部 .sql（每个文件一个事务，
+// 失败即停并回滚，无 dirty=t 卡死）。干净库可直接建出完整 schema。
+//
+//	go run ./cmd/migrate
+//	MIGRATIONS_DIR=../migrations go run ./cmd/migrate
 func main() {
 	_ = godotenv.Load()
 
@@ -18,21 +24,23 @@ func main() {
 
 	ctx := context.Background()
 
-	// Connect to database to run schema init
 	pool, err := db.Open(db.Config{
-		DatabaseURL:    cfg.DatabaseURL,
-		MaxOpenConns:   1,
-		MaxIdleConns:   1,
-		ConnMaxLifetime: 0,
+		DatabaseURL:  cfg.DatabaseURL,
+		MaxOpenConns: 2,
+		MaxIdleConns: 1,
 	})
 	if err != nil {
 		log.Fatalf("[FATAL] cannot connect to database: %v", err)
 	}
 	defer pool.Close()
 
-	// Run InitSchema (Phase 1A schema without migration files)
-	if err := db.InitSchema(ctx, pool, nil); err != nil {
-		log.Fatalf("[FATAL] schema init failed: %v", err)
+	root := os.Getenv("MIGRATIONS_DIR")
+	if root == "" {
+		root = "migrations"
 	}
-	fmt.Println("[OK] schema initialized")
+
+	if err := db.Migrate(ctx, pool, db.Config{MigrationsRoot: root}, slog.Default()); err != nil {
+		log.Fatalf("[FATAL] migrate failed: %v", err)
+	}
+	log.Println("[OK] migrations applied successfully")
 }

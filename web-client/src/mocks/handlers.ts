@@ -5,10 +5,15 @@ import {
   messages,
   projects,
   sessionProjects,
+  knowledgeDocs,
+  mcpServers,
+  mcpUserEnabled,
+  mcpGrants,
   newId,
   fakeJwt,
   type MockUser,
   type MockProject,
+  type MockKnowledgeDoc,
 } from './data'
 
 // ── 工具函数 ────────────────────────────────────────────────────────────────
@@ -694,6 +699,208 @@ export const handlers = [
     }))
 
     return HttpResponse.json({ images, total: images.length })
+  }),
+
+  // ── 知识库：文档列表（管理员） ───────────────────────────────────────────
+  http.get('*/api/knowledge/documents', ({ request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+    if (user.role !== 'admin') {
+      return errorResponse(403, 'forbidden', '仅管理员可管理知识库')
+    }
+
+    const list = knowledgeDocs
+      .filter((d) => d.org_id === user.org_id && d.status !== 'deleted')
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    return HttpResponse.json({ documents: list, total: list.length })
+  }),
+
+  // ── 知识库：上传文档（管理员，异步模拟索引） ─────────────────────────────
+  http.post('*/api/knowledge/documents', async ({ request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+    if (user.role !== 'admin') {
+      return errorResponse(403, 'forbidden', '仅管理员可上传知识库文档')
+    }
+
+    let fileName = ''
+    try {
+      const form = await request.formData()
+      const file = form.get('file')
+      if (file instanceof File) fileName = file.name
+    } catch {
+      return errorResponse(400, 'bad_request', '无法解析上传的文件')
+    }
+
+    const ext = fileName.split('.').pop()?.toLowerCase() ?? ''
+    if (!['pdf', 'docx', 'txt', 'md'].includes(ext)) {
+      return errorResponse(400, 'bad_request', '仅支持 PDF / DOCX / TXT / MD 文件')
+    }
+
+    const ts = new Date().toISOString()
+    const doc: MockKnowledgeDoc = {
+      id: newId(),
+      org_id: user.org_id,
+      dept_id: null,
+      filename: fileName,
+      file_type: ext,
+      status: 'pending',
+      chunk_count: 0,
+      uploaded_by: user.id,
+      error: null,
+      created_at: ts,
+      updated_at: ts,
+    }
+    knowledgeDocs.push(doc)
+
+    // 模拟后端异步索引流水线：pending → indexing → ready/failed
+    setTimeout(() => {
+      if (doc.status !== 'pending') return
+      doc.status = 'indexing'
+      doc.updated_at = new Date().toISOString()
+    }, 1200)
+    setTimeout(() => {
+      if (doc.status !== 'indexing') return
+      // 文件名含 fail 或约 1/8 概率模拟失败态
+      const failed = fileName.toLowerCase().includes('fail') || Math.random() < 0.12
+      if (failed) {
+        doc.status = 'failed'
+        doc.error = '索引失败：文本解析超时'
+      } else {
+        doc.status = 'ready'
+        doc.chunk_count = 8 + Math.floor(Math.random() * 40)
+      }
+      doc.updated_at = new Date().toISOString()
+    }, 3200)
+
+    return HttpResponse.json(doc, { status: 201 })
+  }),
+
+  // ── 知识库：删除文档（管理员，软删除） ──────────────────────────────────
+  http.delete('*/api/knowledge/documents/:id', ({ params, request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+    if (user.role !== 'admin') {
+      return errorResponse(403, 'forbidden', '仅管理员可删除知识库文档')
+    }
+
+    const doc = knowledgeDocs.find(
+      (d) => d.id === String(params.id) && d.org_id === user.org_id,
+    )
+    if (!doc || doc.status === 'deleted') {
+      return errorResponse(404, 'not_found', '文档不存在')
+    }
+    doc.status = 'deleted'
+    doc.updated_at = new Date().toISOString()
+    return new Response(null, { status: 204 })
+  }),
+
+  // ── MCP：server 列表（管理员全部 / 普通用户仅授权） ─────────────────────
+  http.get('*/api/mcp/servers', ({ request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+
+    const visible = mcpServers.filter((s) => {
+      if (s.org_id !== user.org_id) return false
+      if (user.role === 'admin') return true
+      return (mcpGrants[user.id] ?? []).includes(s.id)
+    })
+
+    const list = visible.map((s) => ({
+      ...s,
+      enabled: Boolean(mcpUserEnabled[`${user.id}:${s.id}`]),
+    }))
+    return HttpResponse.json({ servers: list, total: list.length })
+  }),
+
+  // ── MCP：注册 server（管理员） ───────────────────────────────────────────
+  http.post('*/api/mcp/servers', async ({ request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+    if (user.role !== 'admin') {
+      return errorResponse(403, 'forbidden', '仅管理员可注册 MCP Server')
+    }
+
+    const body = (await request.json().catch(() => null)) as {
+      id?: string
+      name?: string
+      endpoint_url?: string
+    } | null
+    if (!body?.id || !body.endpoint_url) {
+      return errorResponse(400, 'bad_request', 'id 与 endpoint_url 不能为空')
+    }
+    if (!/^[a-z0-9][a-z0-9-_]*$/i.test(body.id)) {
+      return errorResponse(400, 'bad_request', 'id 仅允许字母、数字、-、_')
+    }
+    if (mcpServers.some((s) => s.id === body.id && s.org_id === user.org_id)) {
+      return errorResponse(409, 'conflict', '该 Server ID 已存在')
+    }
+
+    const ts = new Date().toISOString()
+    const server = {
+      id: body.id,
+      org_id: user.org_id,
+      name: body.name || body.id,
+      endpoint_url: body.endpoint_url,
+      // URL 含 down 模拟探针失败
+      health_status: (body.endpoint_url.toLowerCase().includes('down')
+        ? 'unhealthy'
+        : 'healthy') as 'healthy' | 'unhealthy',
+      tool_count: body.endpoint_url.toLowerCase().includes('down')
+        ? 0
+        : 2 + Math.floor(Math.random() * 8),
+      created_at: ts,
+      updated_at: ts,
+    }
+    mcpServers.push(server)
+    mcpUserEnabled[`${user.id}:${server.id}`] = false
+
+    return HttpResponse.json(
+      { ...server, enabled: false },
+      { status: 201 },
+    )
+  }),
+
+  // ── MCP：删除 server（管理员） ───────────────────────────────────────────
+  http.delete('*/api/mcp/servers/:id', ({ params, request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+    if (user.role !== 'admin') {
+      return errorResponse(403, 'forbidden', '仅管理员可删除 MCP Server')
+    }
+
+    const idx = mcpServers.findIndex(
+      (s) => s.id === String(params.id) && s.org_id === user.org_id,
+    )
+    if (idx < 0) return errorResponse(404, 'not_found', 'Server 不存在')
+    mcpServers.splice(idx, 1)
+    return new Response(null, { status: 204 })
+  }),
+
+  // ── MCP：用户级启用/停用开关 ─────────────────────────────────────────────
+  http.post('*/api/mcp/servers/:id/toggle', async ({ params, request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+
+    const server = mcpServers.find(
+      (s) => s.id === String(params.id) && s.org_id === user.org_id,
+    )
+    if (!server) return errorResponse(404, 'not_found', 'Server 不存在')
+
+    if (
+      user.role !== 'admin' &&
+      !(mcpGrants[user.id] ?? []).includes(server.id)
+    ) {
+      return errorResponse(403, 'forbidden', '未授权访问该 Server')
+    }
+
+    const body = (await request.json().catch(() => ({}))) as {
+      enabled?: boolean
+    }
+    const enabled = Boolean(body.enabled)
+    mcpUserEnabled[`${user.id}:${server.id}`] = enabled
+
+    return HttpResponse.json({ ...server, enabled })
   }),
 ]
 

@@ -2,7 +2,7 @@
 -- Migration 009: session_project 多对多关联表
 -- =============================================================================
 
-CREATE TABLE session_project (
+CREATE TABLE IF NOT EXISTS session_project (
     session_id  UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     project_id  UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     added_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),

@@ -32,6 +32,14 @@ static ROLE_POLICY: Lazy<HashSet<(&str, &str)>> = Lazy::new(|| {
 });
 
 /// Gate called immediately before a tool executes.
+///
+/// Primary gate: the Casbin-backed unified check
+/// (`rbac::enforce_tool`) covering skill and `mcp:` tools.
+/// Fallback: only when the RBAC service was never initialised do we use
+/// the built-in static table, so an unbootstrapped process still applies
+/// role rules instead of failing open. Every other error (unknown tool,
+/// malformed MCP name, enforcement failure) propagates as-is — the gate
+/// remains fail-closed.
 pub async fn pre_tool_call_check(
     user_ctx: &UserContext,
     tool_name: &str,
@@ -44,15 +52,31 @@ pub async fn pre_tool_call_check(
         "PreToolCall Hook"
     );
 
-    PermissionChecker::default()
-        .authorize(&user_ctx.role, tool_name, parameters)
+    let _ = parameters; // decisions are identity/resource based
+
+    match crate::rbac::enforce_tool(user_ctx, tool_name) {
+        Ok(()) => Ok(()),
+        Err(AppError::Forbidden(_)) => {
+            // Denied at the engine gate: audit the denial here (the routed
+            // gate is never reached).
+            crate::rbac::audit_tool_decision(user_ctx, tool_name, false);
+            Err(AppError::Forbidden(format!(
+                "role '{}' is not allowed to invoke tool '{tool_name}'",
+                user_ctx.role
+            )))
+        }
+        Err(AppError::Internal(msg)) if msg.contains("RBAC service not initialised") => {
+            PermissionChecker::default()
+                .authorize(&user_ctx.role, tool_name, parameters)
+        }
+        Err(e) => Err(e),
+    }
 }
 
-/// Pluggable checker — the Casbin adapter seam.
+/// Pluggable checker — static fallback used only when the Casbin service
+/// is unavailable (see `pre_tool_call_check`).
 #[derive(Default)]
-pub struct PermissionChecker {
-    // Phase 1B: holds `casbin::Enforcer` + Postgres policy watcher
-}
+pub struct PermissionChecker {}
 
 impl PermissionChecker {
     pub fn authorize(

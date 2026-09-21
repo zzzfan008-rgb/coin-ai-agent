@@ -8,6 +8,8 @@ import {
   ChevronDown,
   ChevronRight,
   Archive,
+  BookOpen,
+  Plug,
 } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -219,9 +221,61 @@ export function Sidebar({
             )}
           </div>
         )}
+        {/* 管理入口（仅 admin） */}
+        {user?.role === 'admin' && (
+          <>
+            <p className="px-1 pb-1 pt-4 text-[11px] font-medium uppercase tracking-wide text-faint">
+              管理
+            </p>
+            <ul className="space-y-0.5">
+              <li>
+                <button
+                  type="button"
+                  onClick={() => navigate('/knowledge')}
+                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
+                    location.pathname === '/knowledge'
+                      ? 'bg-primary/15 text-primary-light'
+                      : 'text-muted hover:bg-surface-elevated hover:text-content'
+                  }`}
+                >
+                  <BookOpen
+                    size={15}
+                    className={
+                      location.pathname === '/knowledge'
+                        ? 'text-primary-light'
+                        : 'text-faint'
+                    }
+                    shrink-0
+                  />
+                  知识库
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  onClick={() => navigate('/mcp')}
+                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
+                    location.pathname === '/mcp'
+                      ? 'bg-primary/15 text-primary-light'
+                      : 'text-muted hover:bg-surface-elevated hover:text-content'
+                  }`}
+                >
+                  <Plug
+                    size={15}
+                    className={
+                      location.pathname === '/mcp'
+                        ? 'text-primary-light'
+                        : 'text-faint'
+                    }
+                    shrink-0
+                  />
+                  MCP 集成
+                </button>
+              </li>
+            </ul>
+          </>
+        )}
       </div>
-
-      {/* 用户区 */}
       <div className="border-t border-border px-3 py-2.5">
         <div className="flex items-center gap-2.5">
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/20 text-sm font-medium text-primary-light">

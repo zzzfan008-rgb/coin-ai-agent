@@ -118,7 +118,7 @@ func (s *AuthService) Login(ctx context.Context, req model.LoginRequest) (*model
 		OrgID       uuid.UUID `db:"org_id"`
 		DeptID      uuid.UUID `db:"dept_id"`
 		Password    string    `db:"password_hash"`
-		DisplayName sql.NullString
+		DisplayName sql.NullString `db:"display_name"`
 		Role        string `db:"role"`
 	}
 	err := s.db.GetContext(ctx, &user,

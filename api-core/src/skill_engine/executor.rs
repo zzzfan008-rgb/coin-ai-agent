@@ -26,6 +26,14 @@ pub async fn route_tool_call(
     user_ctx: &UserContext,
     _store: &FashionStore,
 ) -> Result<String> {
+    // Unified PreToolCall gate — Casbin enforcement covering BOTH MCP and
+    // skill tools before any routing/execution (fail-closed). The engine
+    // already gated at PreToolCall; this keeps route_tool_call safe when
+    // invoked directly. Allowed decisions are audited here exactly once
+    // (denials were audited upstream by the engine gate).
+    crate::rbac::enforce_tool(user_ctx, tool_name)?;
+    crate::rbac::audit_tool_decision(user_ctx, tool_name, true);
+
     // ── MCP routing ──────────────────────────────────────────────────────────
     // Tool names with the `mcp:` prefix are forwarded to a registered MCP
     // server. Format:  mcp:<server-id>/<tool-name>
@@ -46,9 +54,13 @@ pub async fn route_tool_call(
         }
     }
 
-    // Resolve and clone everything we need while holding the read lock,
-    // then drop it BEFORE any await (std RwLockReadGuard is !Send).
-    let (skill_id, resolved_tool, skill_meta) = {
+    // Resolve skill/tool via the shared resolver (pure metadata, no data).
+    let (skill_id, resolved_tool) =
+        resolve_tool_owner(tool_name).ok_or_else(|| {
+            AppError::NotFound(format!("Could not resolve tool name: {tool_name}"))
+        })?;
+
+    let skill_meta = {
         let engine_guard = SKILL_ENGINE
             .read()
             .map_err(|_| AppError::Internal("SKILL_ENGINE not initialised".into()))?;
@@ -57,53 +69,11 @@ pub async fn route_tool_call(
                 "SKILL_ENGINE not initialised — call SkillEngine::load_from_dir()".into(),
             )
         })?;
-
-        // Build a kebab-case → skill_id lookup map for tool name resolution.
-        let skill_id_lookup: std::collections::HashMap<String, String> = engine
-            .loader
-            .skill_ids()
-            .iter()
-            .map(|id| {
-                // kebab to snake for matching LLM output
-                let snake = id.replace('-', "_");
-                (snake, id.clone())
-            })
-            .collect();
-
-        // Build a (skill_id, tool_name) → true lookup for fully-qualified names.
-        let full_name_lookup: std::collections::HashMap<String, (String, String)> = engine
-            .loader
-            .list()
-            .into_iter()
-            .flat_map(|m| {
-                m.tools
-                    .iter()
-                    .map(|t| {
-                        let skill_snake = m.id.replace('-', "_");
-                        let key = format!("{}_{}", skill_snake, t.name);
-                        (key, (m.id.clone(), t.name.clone()))
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-
-        let (skill_id, resolved_tool) =
-            resolve_tool_name(tool_name, &skill_id_lookup, &full_name_lookup).map_err(|_| {
-                AppError::NotFound(format!("Could not resolve tool name: {tool_name}"))
-            })?;
-
-        let meta = engine
+        engine
             .get_skill(&skill_id)
             .ok_or_else(|| AppError::NotFound(format!("Skill '{skill_id}' not found")))?
-            .clone();
-
-        (skill_id, resolved_tool, meta)
-    }; // read guard dropped here
-
-    // Permission gate — real Casbin enforcement (T-017).
-    //   resource = "skill:{skill_id}", action = "execute"
-    // Denied → AppError::Forbidden (HTTP 403).
-    crate::rbac::enforce_skill(user_ctx, &skill_id)?;
+            .clone()
+    };
 
     let result = execute_skill(&skill_meta, &resolved_tool, arguments, user_ctx).await?;
     Ok(serde_json::json!({
@@ -113,6 +83,39 @@ pub async fn route_tool_call(
         "result": result,
     })
     .to_string())
+}
+
+/// Resolve a tool_name to its owning `(skill_id, tool_name)` using the live
+/// SKILL_ENGINE. Pure metadata lookup — reads no business data.
+///
+/// The read guard is dropped before return (guards are not held across
+/// awaits by callers).
+pub fn resolve_tool_owner(tool_name: &str) -> Option<(String, String)> {
+    let engine_guard = SKILL_ENGINE.read().ok()?;
+    let engine = engine_guard.as_ref()?;
+
+    // kebab-case skill id → same set, snake-cased for LLM names.
+    let skill_id_lookup: std::collections::HashMap<String, String> = engine
+        .loader
+        .skill_ids()
+        .iter()
+        .map(|id| (id.replace('-', "_"), id.clone()))
+        .collect();
+
+    // Fully-qualified `<skill_snake>_<tool>` lookup.
+    let full_name_lookup: std::collections::HashMap<String, (String, String)> = engine
+        .loader
+        .list()
+        .into_iter()
+        .flat_map(|m| {
+            m.tools.iter().map(move |t| {
+                let key = format!("{}_{}", m.id.replace('-', "_"), t.name);
+                (key, (m.id.clone(), t.name.clone()))
+            })
+        })
+        .collect();
+
+    resolve_tool_name(tool_name, &skill_id_lookup, &full_name_lookup).ok()
 }
 
 /// Resolve a tool_name string to (skill_id, tool_name).

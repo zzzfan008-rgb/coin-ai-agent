@@ -349,6 +349,111 @@ export async function listStyleImages(
   return apiFetch(`/api/styles/${styleId}/images`)
 }
 
+// ── 知识库管理 (T-015 / F-06) ───────────────────────────────────────────────
+
+export type KnowledgeDocStatus =
+  | 'pending'
+  | 'indexing'
+  | 'ready'
+  | 'failed'
+  | 'deleted'
+
+export interface KnowledgeDocument {
+  id: string
+  org_id: string
+  dept_id: string | null
+  filename: string
+  file_type: string
+  status: KnowledgeDocStatus
+  chunk_count: number
+  uploaded_by: string | null
+  error: string | null
+  created_at: string
+  updated_at: string
+}
+
+export const KNOWLEDGE_ALLOWED_EXT = ['pdf', 'docx', 'txt', 'md']
+
+/** 知识库文档列表（管理员） */
+export async function listKnowledgeDocuments(): Promise<{
+  documents: KnowledgeDocument[]
+  total: number
+}> {
+  return apiFetch('/api/knowledge/documents')
+}
+
+/** 上传文档（multipart），上传后由后端异步索引，可轮询列表查看进度 */
+export async function uploadKnowledgeDocument(file: File): Promise<KnowledgeDocument> {
+  const form = new FormData()
+  form.append('file', file)
+
+  const res = await fetch('/api/knowledge/documents', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: form,
+  })
+  if (!res.ok) throw await readError(res)
+  return (await res.json()) as KnowledgeDocument
+}
+
+/** 删除文档（软删除，同时清理向量库） */
+export async function deleteKnowledgeDocument(id: string): Promise<void> {
+  await apiFetch(`/api/knowledge/documents/${id}`, { method: 'DELETE' })
+}
+
+// ── MCP Server 管理 (T-016 / F-06) ──────────────────────────────────────────
+
+export type McpHealthStatus = 'healthy' | 'unhealthy' | 'unknown'
+
+export interface McpServer {
+  id: string
+  org_id: string
+  name: string
+  endpoint_url: string
+  health_status: McpHealthStatus
+  /** 当前用户是否启用该 server（用户级开关） */
+  enabled: boolean
+  tool_count: number
+  created_at: string
+  updated_at: string
+}
+
+/** 已注册 MCP server 列表（管理员看全部；普通用户仅看已授权的） */
+export async function listMcpServers(): Promise<{
+  servers: McpServer[]
+  total: number
+}> {
+  return apiFetch('/api/mcp/servers')
+}
+
+/** 注册 MCP server（管理员） */
+export async function registerMcpServer(body: {
+  id: string
+  name?: string
+  endpoint_url: string
+}): Promise<McpServer> {
+  return apiFetch('/api/mcp/servers', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/** 删除 MCP server（管理员） */
+export async function deleteMcpServer(id: string): Promise<void> {
+  await apiFetch(`/api/mcp/servers/${id}`, { method: 'DELETE' })
+}
+
+/** 用户级启用/停用开关 */
+export async function toggleMcpServer(
+  id: string,
+  enabled: boolean,
+): Promise<McpServer> {
+  return apiFetch(`/api/mcp/servers/${id}/toggle`, {
+    method: 'POST',
+    body: JSON.stringify({ enabled }),
+  })
+}
+
 // ── 流式对话（SSE） ─────────────────────────────────────────────────────────
 
 export interface StreamChatParams {

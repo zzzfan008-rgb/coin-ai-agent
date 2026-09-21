@@ -244,6 +244,39 @@ type ProjectList struct {
 	Total    int           `json:"total"`
 }
 
+// ─── MCP servers (T-016) ─────────────────────────────────────────────────────
+
+type McpServerRequest struct {
+	Name       string            `json:"name" validate:"required"`
+	ServerType string            `json:"server_type"` // stdio | http
+	Endpoint   string            `json:"endpoint"`
+	AuthToken  string            `json:"auth_token,omitempty"`
+	EnvVars    map[string]string `json:"env_vars"`
+}
+
+type McpServerDTO struct {
+	ID         string `db:"id" json:"id"`
+	OrgID      string `db:"org_id" json:"org_id"`
+	Name       string `db:"name" json:"name"`
+	ServerType string `db:"server_type" json:"server_type"`
+	Endpoint   *string `db:"endpoint" json:"endpoint"`
+	IsActive   bool   `db:"is_active" json:"is_active"`
+	CreatedAt  string `db:"created_at" json:"created_at"`
+}
+
+type McpServerList struct {
+	Servers []McpServerDTO `json:"servers"`
+	Total   int            `json:"total"`
+}
+
+type McpUserToggleRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+type McpUserServersResponse struct {
+	McpServerIDs []string `json:"mcp_server_ids"`
+}
+
 // ─── Users ───────────────────────────────────────────────────────────────────
 
 type UserProfileResponse struct {

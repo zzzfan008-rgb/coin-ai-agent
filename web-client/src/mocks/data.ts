@@ -77,6 +77,41 @@ export function fakeJwt(userId: string): string {
   return `${header}.${payload}.mock-signature`
 }
 
+// ── 知识库 (T-015) ──────────────────────────────────────────────────────────
+
+export interface MockKnowledgeDoc {
+  id: string
+  org_id: string
+  dept_id: string | null
+  filename: string
+  file_type: string
+  status: 'pending' | 'indexing' | 'ready' | 'failed' | 'deleted'
+  chunk_count: number
+  uploaded_by: string | null
+  error: string | null
+  created_at: string
+  updated_at: string
+}
+
+// ── MCP Server (T-016) ──────────────────────────────────────────────────────
+
+export interface MockMcpServer {
+  id: string
+  org_id: string
+  name: string
+  endpoint_url: string
+  health_status: 'healthy' | 'unhealthy' | 'unknown'
+  tool_count: number
+  created_at: string
+  updated_at: string
+}
+
+/** 用户级启用状态：key = `${userId}:${serverId}` */
+export const mcpUserEnabled: Record<string, boolean> = {}
+
+/** 普通用户被授权可见的 server（mock：designer 仅授权一个） */
+export const mcpGrants: Record<string, string[]> = {}
+
 const now = new Date().toISOString()
 
 // ── 种子用户（demo 账号） ──────────────────────────────────────────────────
@@ -91,6 +126,16 @@ export const users: MockUser[] = [
     display_name: '示例设计师',
     email: 'designer@example.com',
     role: 'designer',
+  },
+  {
+    id: 'u-demo-admin',
+    org_id: 'org-demo-0001',
+    dept_id: 'dept-demo-0001',
+    username: 'admin',
+    password: 'admin123',
+    display_name: '平台管理员',
+    email: 'admin@example.com',
+    role: 'admin',
   },
 ]
 
@@ -167,3 +212,79 @@ export const sessionProjects: MockSessionProject[] = [
     added_at: now,
   },
 ]
+
+// ── 种子知识库文档 ─────────────────────────────────────────────────────────
+
+export const knowledgeDocs: MockKnowledgeDoc[] = [
+  {
+    id: 'doc-demo-0001',
+    org_id: 'org-demo-0001',
+    dept_id: null,
+    filename: '2027春夏面料趋势报告.pdf',
+    file_type: 'pdf',
+    status: 'ready',
+    chunk_count: 42,
+    uploaded_by: 'u-demo-admin',
+    error: null,
+    created_at: now,
+    updated_at: now,
+  },
+  {
+    id: 'doc-demo-0002',
+    org_id: 'org-demo-0001',
+    dept_id: 'dept-demo-0001',
+    filename: '面料保养手册.docx',
+    file_type: 'docx',
+    status: 'ready',
+    chunk_count: 18,
+    uploaded_by: 'u-demo-admin',
+    error: null,
+    created_at: now,
+    updated_at: now,
+  },
+  {
+    id: 'doc-demo-0003',
+    org_id: 'org-demo-0001',
+    dept_id: null,
+    filename: '供应链对接规范.txt',
+    file_type: 'txt',
+    status: 'failed',
+    chunk_count: 0,
+    uploaded_by: 'u-demo-admin',
+    error: '文件编码无法识别（非 UTF-8）',
+    created_at: now,
+    updated_at: now,
+  },
+]
+
+// ── 种子 MCP Servers ───────────────────────────────────────────────────────
+
+export const mcpServers: MockMcpServer[] = [
+  {
+    id: 'fabric-erp',
+    org_id: 'org-demo-0001',
+    name: '面料 ERP 系统',
+    endpoint_url: 'http://localhost:9101/mcp',
+    health_status: 'healthy',
+    tool_count: 6,
+    created_at: now,
+    updated_at: now,
+  },
+  {
+    id: 'plm-tools',
+    org_id: 'org-demo-0001',
+    name: 'PLM 款式库',
+    endpoint_url: 'http://localhost:9102/mcp',
+    health_status: 'unhealthy',
+    tool_count: 0,
+    created_at: now,
+    updated_at: now,
+  },
+]
+
+// designer 被授权 fabric-erp 且默认启用
+mcpGrants['u-demo-0001'] = ['fabric-erp']
+mcpUserEnabled['u-demo-0001:fabric-erp'] = true
+// admin 默认启用全部
+mcpUserEnabled['u-demo-admin:fabric-erp'] = true
+mcpUserEnabled['u-demo-admin:plm-tools'] = false

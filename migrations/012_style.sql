@@ -4,7 +4,7 @@
 -- 描述: 款式库表
 -- =============================================================================
 
-CREATE TABLE styles (
+CREATE TABLE IF NOT EXISTS styles (
     id                  UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     org_id              UUID            NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
     dept_id             UUID            NOT NULL REFERENCES depts(id) ON DELETE CASCADE,
@@ -26,4 +26,4 @@ COMMENT ON COLUMN styles.key_features IS '关键设计特征';
 COMMENT ON COLUMN styles.suitable_seasons IS '适用季节';
 COMMENT ON COLUMN styles.target_audience IS '目标人群';
 
-CREATE INDEX idx_styles_org_dept ON styles(org_id, dept_id);
+CREATE INDEX IF NOT EXISTS idx_styles_org_dept ON styles(org_id, dept_id);

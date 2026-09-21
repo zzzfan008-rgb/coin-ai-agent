@@ -41,6 +41,9 @@ impl DocumentIndexer {
         file_type: &str,
         pool: &PgPool,
     ) -> Result<usize> {
+        // knowledge_documents.id is uuid; bind a Uuid, never a &str
+        // (Postgres rejects `uuid = text` with no implicit cast).
+        let doc_uuid = Uuid::parse_str(doc_id)?;
         // ── 1. Parse ─────────────────────────────────────────────────────────
         tracing::info!(doc_id, file_type, "Parsing document");
         let text = super::DocumentParser::parse(file_bytes, file_type).await?;
@@ -130,7 +133,7 @@ impl DocumentIndexer {
         .bind(indexed as i32)
         .bind(indexed as i32)
         .bind(total_chunks as i32)
-        .bind(doc_id)
+        .bind(doc_uuid)
         .execute(pool)
         .await?;
 
@@ -141,22 +144,24 @@ impl DocumentIndexer {
     // ── Status helpers ───────────────────────────────────────────────────────
 
     async fn set_status(pool: &PgPool, doc_id: &str, status: &str) -> Result<()> {
+        let doc_uuid = Uuid::parse_str(doc_id)?;
         sqlx::query("UPDATE knowledge_documents SET status = $1 WHERE id = $2")
             .bind(status)
-            .bind(doc_id)
+            .bind(doc_uuid)
             .execute(pool)
             .await?;
         Ok(())
     }
 
     async fn set_failed(pool: &PgPool, doc_id: &str, message: &str) -> Result<()> {
+        let doc_uuid = Uuid::parse_str(doc_id)?;
         sqlx::query(
             "UPDATE knowledge_documents
              SET status = 'failed', error_message = $1, processed_at = NOW()
              WHERE id = $2",
         )
         .bind(message)
-        .bind(doc_id)
+        .bind(doc_uuid)
         .execute(pool)
         .await?;
         Ok(())

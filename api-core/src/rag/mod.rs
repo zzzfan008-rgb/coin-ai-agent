@@ -182,6 +182,11 @@ impl RagRetriever {
         self.store.search(vector, org_id, dept_id, limit).await
     }
 
+    /// Delete all Qdrant points belonging to a document (soft-delete path).
+    pub async fn delete_document_vectors(&self, doc_id: &str) -> Result<()> {
+        self.store.delete_by_document(doc_id).await
+    }
+
     /// Convenience method: embed the query, search, and return concatenated
     /// text suitable for injection into an LLM prompt.
     ///

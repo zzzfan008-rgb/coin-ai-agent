@@ -3,7 +3,7 @@
 pub mod handlers;
 
 use axum::{
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 
@@ -52,6 +52,15 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/api/knowledge/documents",
             post(handlers::upload_knowledge_document),
+        )
+        .route(
+            "/api/knowledge/documents/:id",
+            delete(handlers::delete_knowledge_document),
+        )
+        // Intent classification (T-014)
+        .route(
+            "/internal/intent/classify",
+            post(handlers::intent_classify),
         )
         // MCP servers
         .route(

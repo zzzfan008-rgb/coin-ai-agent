@@ -300,16 +300,11 @@ CREATE TABLE audit_logs (
 COMMENT ON TABLE audit_logs IS '全量审计日志，action 如 login|logout|chat|skill_call|mcp_call';
 
 -- -----------------------------------------------------------------------------
--- 16. 迁移记录表（migrate 框架使用）
+-- 16. 迁移记录表
 -- -----------------------------------------------------------------------------
-CREATE TABLE schema_migrations (
-    version     BIGINT    PRIMARY KEY,
-    dirty       BOOLEAN   NOT NULL DEFAULT false,
-    applied_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    rolled_back_at TIMESTAMPTZ
-);
-
-COMMENT ON TABLE schema_migrations IS '迁移版本记录，dirty=true 表示执行中断';
+-- schema_migrations 表由迁移运行器（api-gateway/internal/db/migrations.go）
+-- 独占创建与维护，迁移文件内不再建表/插入，避免与运行器在同一事务内冲突
+-- （曾导致 "relation schema_migrations already exists" 与 dirty=t 残留）。
 
 -- -----------------------------------------------------------------------------
 -- 17. 索引
@@ -363,7 +358,7 @@ CREATE INDEX idx_messages_session ON messages(session_id, created_at);
 
 -- projects
 CREATE INDEX idx_projects_org_id  ON projects(org_id);
-CREATE INDEX idx_projects_user_id ON projects(user_id);
+CREATE INDEX idx_projects_owner_id ON projects(owner_id);
 
 -- knowledge_collections
 CREATE INDEX idx_kb_org_id        ON knowledge_collections(org_id);
@@ -417,8 +412,7 @@ INSERT INTO users (id, org_id, dept_id, username, password_hash, display_name, e
      'designer1@fashionai.local',
      'designer');
 
--- 迁移记录
-INSERT INTO schema_migrations (version, dirty, applied_at) VALUES (1, false, NOW());
+-- schema_migrations 版本行由运行器在事务提交时写入，此处不再插入。
 
 -- -----------------------------------------------------------------------------
 -- 19. 注释 end

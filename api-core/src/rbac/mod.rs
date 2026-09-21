@@ -18,6 +18,7 @@ use std::sync::{Arc, RwLock};
 
 use casbin::prelude::{CoreApi, DefaultModel, Enforcer, StringAdapter};
 use once_cell::sync::OnceCell;
+use sqlx::PgPool;
 
 use crate::api::handlers::UserContext;
 use crate::error::{AppError, Result};
@@ -30,6 +31,14 @@ const POLICIES_CSV: &str = include_str!("policies.csv");
 /// Process-global RBAC service, initialised once in `main` before the server
 /// starts. Mirrors the `SKILL_ENGINE` global pattern.
 pub static RBAC_SERVICE: OnceCell<RbacService> = OnceCell::new();
+
+/// Pool used for best-effort audit-log writes of tool permission decisions.
+pub static AUDIT_POOL: OnceCell<PgPool> = OnceCell::new();
+
+/// Publish the pool used to record tool-level audit rows (called from main).
+pub fn set_audit_pool(pool: PgPool) {
+    let _ = AUDIT_POOL.set(pool);
+}
 
 /// Obtain the initialised global RBAC service.
 pub fn service() -> Option<&'static RbacService> {
@@ -149,6 +158,114 @@ pub fn enforce_skill(user_ctx: &UserContext, skill_id: &str) -> Result<()> {
             user_ctx.user_id, user_ctx.role, skill_id
         )))
     }
+}
+
+/// Unified PreToolCall gate for BOTH skill and MCP tools (T-017 / F-05).
+///
+/// Resource mapping:
+///   - `mcp:{server}/{tool}` → Casbin object `mcp:{server}/{tool}`, act `invoke`
+///   - any other tool name   → resolved via SKILL_ENGINE → `skill:{id}`, act `execute`
+///
+/// Enforcement happens before routing in `route_tool_call`, so the MCP
+/// branch can no longer bypass Casbin. Decisions are written to audit_logs.
+/// Fails closed: missing enforcer or enforcement error → denied.
+pub fn enforce_tool(user_ctx: &UserContext, tool_name: &str) -> Result<()> {
+    let (resource, action, _audit_action) = tool_resource(tool_name)?;
+
+    let rbac = service().ok_or_else(|| {
+        AppError::Internal("RBAC service not initialised".to_string())
+    })?;
+
+    let allowed = rbac.check_permission(
+        &user_ctx.user_id,
+        &user_ctx.role,
+        &user_ctx.dept_id,
+        &resource,
+        action,
+    );
+
+    if allowed {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(format!(
+            "User '{}' (role: '{}') is not allowed to invoke '{}'",
+            user_ctx.user_id, user_ctx.role, tool_name
+        )))
+    }
+}
+
+/// Resource/action mapping for a tool name (shared by the two gate sites):
+/// returns `(resource, action, audit_action)`.
+fn tool_resource(tool_name: &str) -> Result<(String, &'static str, &'static str)> {
+    if let Some(rest) = tool_name.strip_prefix("mcp:") {
+        if rest.split_once('/').is_none() {
+            return Err(AppError::BadRequest(format!(
+                "Malformed MCP tool name '{tool_name}' — expected mcp:server/tool"
+            )));
+        }
+        Ok((format!("mcp:{rest}"), "invoke", "mcp_call"))
+    } else {
+        let (skill_id, _remote_tool) =
+            crate::skill_engine::executor::resolve_tool_owner(tool_name).ok_or_else(|| {
+                AppError::NotFound(format!("Could not resolve tool name: {tool_name}"))
+            })?;
+        Ok((format!("skill:{skill_id}"), "execute", "skill_call"))
+    }
+}
+
+/// Record a tool permission decision to audit_logs (public so both gate
+/// sites — the engine's PreToolCall check and `route_tool_call` — can emit
+/// exactly one row per decision). Best effort; never blocks the request.
+pub fn audit_tool_decision(user_ctx: &UserContext, tool_name: &str, allowed: bool) {
+    let Ok((resource, _action, audit_action)) = tool_resource(tool_name) else {
+        return;
+    };
+    record_tool_audit(user_ctx, audit_action, tool_name, &resource, allowed);
+}
+
+/// Best-effort audit_logs insert of a tool permission decision.
+/// Audit failures are logged only and never block execution or change the
+/// fail-closed behaviour of [`enforce_tool`].
+fn record_tool_audit(
+    user_ctx: &UserContext,
+    action: &str,
+    tool_name: &str,
+    resource: &str,
+    allowed: bool,
+) {
+    let Some(pool) = AUDIT_POOL.get() else {
+        return;
+    };
+    let (Ok(org_uuid), Ok(user_uuid)) = (
+        uuid::Uuid::parse_str(&user_ctx.org_id),
+        uuid::Uuid::parse_str(&user_ctx.user_id),
+    ) else {
+        return;
+    };
+    let details = serde_json::json!({
+        "tool": tool_name,
+        "resource": resource,
+        "allowed": allowed,
+        "role": user_ctx.role,
+    });
+    let pool = pool.clone();
+    let action = action.to_string();
+    tokio::spawn(async move {
+        let res = sqlx::query(
+            r#"INSERT INTO audit_logs (org_id, user_id, action, resource_type, details)
+               VALUES ($1, $2, $3, $4, $5::jsonb)"#,
+        )
+        .bind(org_uuid)
+        .bind(user_uuid)
+        .bind(action)
+        .bind("tool")
+        .bind(details.to_string())
+        .execute(&pool)
+        .await;
+        if let Err(e) = res {
+            tracing::warn!("write tool audit_logs failed: {e}");
+        }
+    });
 }
 
 #[cfg(test)]

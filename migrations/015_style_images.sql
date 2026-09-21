@@ -6,7 +6,7 @@
 -- 依赖: 001_init_schema.sql (orgs, depts, users), 012_style.sql (styles)
 -- =============================================================================
 
-CREATE TABLE style_images (
+CREATE TABLE IF NOT EXISTS style_images (
     id              UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     org_id          UUID            NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
     dept_id         UUID            NOT NULL REFERENCES depts(id) ON DELETE CASCADE,
@@ -20,5 +20,5 @@ CREATE TABLE style_images (
 COMMENT ON TABLE style_images IS '款式图片，CLIP 向量化后用于以图搜图';
 COMMENT ON COLUMN style_images.image_path IS 'MinIO 对象路径或本地 uploads 路径，格式: style-images/{org_id}/{uuid}.{ext}';
 
-CREATE INDEX idx_style_images_org_dept   ON style_images(org_id, dept_id);
-CREATE INDEX idx_style_images_style      ON style_images(style_id);
+CREATE INDEX IF NOT EXISTS idx_style_images_org_dept   ON style_images(org_id, dept_id);
+CREATE INDEX IF NOT EXISTS idx_style_images_style      ON style_images(style_id);

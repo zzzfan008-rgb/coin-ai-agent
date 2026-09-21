@@ -81,6 +81,19 @@ m = r.role == p.role && pathMatch(r.path, p.path) && (p.method == "*" || r.metho
 		{"designer", "/api/sessions/{id}", "GET"},
 		{"designer", "/api/sessions/{id}", "PATCH"},
 		{"designer", "/api/sessions/{id}/messages", "GET"},
+		// Designer: projects (T-018)
+		{"designer", "/api/projects", "GET"},
+		{"designer", "/api/projects", "POST"},
+		{"designer", "/api/projects/*", "*"},
+		{"designer", "/api/sessions/{id}/projects", "GET"},
+		// Designer: MCP servers list + own enable/disable (T-016)
+		{"designer", "/api/mcp/servers", "GET"},
+		{"designer", "/api/mcp/servers/*/user", "PUT"},
+		// Viewer: read-only projects + MCP list
+		{"viewer", "/api/projects", "GET"},
+		{"viewer", "/api/projects/*", "GET"},
+		{"viewer", "/api/sessions/{id}/projects", "GET"},
+		{"viewer", "/api/mcp/servers", "GET"},
 		// Viewer: read-only
 		{"viewer", "/v1/chat/completions", "POST"},
 		{"viewer", "/v1/models", "GET"},

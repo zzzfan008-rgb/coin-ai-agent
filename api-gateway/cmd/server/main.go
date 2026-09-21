@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -49,6 +50,18 @@ func main() {
 		} else {
 			log.Println("[OK] database connected")
 			defer pool.Close()
+
+			// 自动执行 migrations/（唯一权威 schema 路径）；
+			// SKIP_MIGRATIONS=1 可关闭（如容器 entrypoint 已单独迁移）。
+			if os.Getenv("SKIP_MIGRATIONS") != "1" {
+				migRoot := os.Getenv("MIGRATIONS_DIR")
+				if migRoot == "" {
+					migRoot = "migrations"
+				}
+				if err := db.Migrate(ctx, pool, db.Config{MigrationsRoot: migRoot}, slog.Default()); err != nil {
+					log.Printf("[WARN] auto-migrate failed: %v (continuing in degraded mode)", err)
+				}
+			}
 		}
 	}
 
@@ -78,6 +91,7 @@ func main() {
 		sessionSvc    *service.SessionService
 		projectSvc    *service.ProjectService
 		auditSvc     *service.AuditService
+		mcpSvc       *service.McpService
 		chatH        *handler.ChatHandler
 	)
 	if pool != nil {
@@ -88,6 +102,7 @@ func main() {
 		sessionSvc  = service.NewSessionService(pool)
 		projectSvc  = service.NewProjectService(pool)
 		auditSvc    = service.NewAuditService(pool)
+		mcpSvc      = service.NewMcpService(pool)
 	}
 
 	chatSvc := service.NewChatService(cfg.RustCoreURL)
@@ -99,6 +114,7 @@ func main() {
 	var roleH    *handler.RoleHandler
 	var sessionH *handler.SessionHandler
 	var projectH *handler.ProjectHandler
+	var mcpH2    *handler.McpHandler
 	var healthH  *handler.HealthHandler
 
 	if pool != nil {
@@ -108,6 +124,7 @@ func main() {
 		roleH    = handler.NewRoleHandler(roleSvc)
 		sessionH = handler.NewSessionHandler(sessionSvc, chatSvc)
 		projectH = handler.NewProjectHandler(projectSvc)
+		mcpH2    = handler.NewMcpHandler(mcpSvc)
 	}
 	chatH = handler.NewChatHandler(chatSvc, jwtSvc)
 	healthH = handler.NewHealthHandler(chatSvc)
@@ -193,6 +210,12 @@ func main() {
 		api.HandleFunc("/projects/{id}/sessions", projectH.AddSession).Methods(http.MethodPost)
 		api.HandleFunc("/projects/{id}/sessions/{session_id}", projectH.RemoveSession).Methods(http.MethodDelete)
 		api.HandleFunc("/sessions/{id}/projects", projectH.ListForSession).Methods(http.MethodGet)
+
+		// MCP servers (T-016)
+		api.HandleFunc("/mcp/servers", mcpH2.Register).Methods(http.MethodPost)
+		api.HandleFunc("/mcp/servers", mcpH2.List).Methods(http.MethodGet)
+		api.HandleFunc("/mcp/servers/{id}", mcpH2.Delete).Methods(http.MethodDelete)
+		api.HandleFunc("/mcp/servers/{id}/user", mcpH2.ToggleUser).Methods(http.MethodPut)
 
 		// OpenAI-compatible routes
 		v1 := r.PathPrefix("/v1").Subrouter()

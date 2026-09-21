@@ -76,6 +76,9 @@ async fn main() -> Result<()> {
         tracing::warn!("Database connectivity check failed: {e}");
     }
 
+    // Publish pool for tool-level audit writes (rbac enforce_tool).
+    crate::rbac::set_audit_pool(session_store.pool().clone());
+
     let llm_client = Arc::new(LlmClient::new(&config)?);
     tracing::info!("LLM client ready (provider={})", config.llm_provider);
 

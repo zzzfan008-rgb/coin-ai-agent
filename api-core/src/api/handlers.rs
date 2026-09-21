@@ -872,6 +872,73 @@ pub async fn upload_knowledge_document(
     }))
 }
 
+// ── DELETE /api/knowledge/documents/:id ─────────────────────────────────────
+
+/// Soft-delete a knowledge document and remove its vectors from Qdrant.
+///
+/// Scoped by org + dept from the (trusted internal) query params
+/// `org_id` / `dept_id` so a caller cannot delete another tenant's document
+/// by guessing a UUID. Sets `status=deleted`, `deleted_at=NOW()` and
+/// deletes every Qdrant point whose payload `doc_id` matches.
+pub async fn delete_knowledge_document(
+    State(state): State<AppState>,
+    Path(doc_id): Path<Uuid>,
+    Query(q): Query<KnowledgeDocDeleteQuery>,
+) -> Result<Json<Value>, crate::error::AppError> {
+    let res = sqlx::query(
+        r#"UPDATE knowledge_documents
+           SET status = 'deleted', deleted_at = NOW()
+           WHERE id = $1 AND org_id = $2 AND dept_id = $3
+             AND deleted_at IS NULL"#,
+    )
+    .bind(doc_id)
+    .bind(q.org_id)
+    .bind(q.dept_id)
+    .execute(state.session_store.pool())
+    .await?;
+
+    if res.rows_affected() == 0 {
+        return Err(crate::error::AppError::NotFound(format!(
+            "knowledge document {doc_id} not found in this org/dept"
+        )));
+    }
+
+    // Remove vectors (best effort — doc is already marked deleted).
+    if let Err(e) = state
+        .rag_retriever
+        .delete_document_vectors(&doc_id.to_string())
+        .await
+    {
+        tracing::warn!(%doc_id, "Qdrant vector deletion failed: {e}");
+    }
+
+    Ok(Json(serde_json::json!({
+        "id": doc_id.to_string(),
+        "status": "deleted",
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct KnowledgeDocDeleteQuery {
+    org_id: Uuid,
+    dept_id: Uuid,
+}
+
+// ── POST /internal/intent/classify ──────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct IntentClassifyRequest {
+    pub message: String,
+}
+
+/// Classify a message: intent, skill routing, confidence and candidates.
+pub async fn intent_classify(
+    State(state): State<AppState>,
+    Json(req): Json<IntentClassifyRequest>,
+) -> Result<Json<crate::intent::IntentResult>, crate::error::AppError> {
+    Ok(Json(state.intent_router.classify(&req.message)))
+}
+
 // ── GET /api/mcp/servers/:id/tools ───────────────────────────────────────────
 
 /// List the tools exposed by a registered MCP server.
@@ -1173,20 +1240,33 @@ pub async fn upload_style_image(
 // ── GET /api/styles/:id/images ───────────────────────────────────────────────
 
 /// List images attached to a style, newest first.
+///
+/// Tenant filtered: `org_id` + `dept_id` query params are required (core is
+/// an internal trusted hop; the gateway injects them from JWT claims), so
+/// images cannot be enumerated across tenants by style UUID.
 pub async fn list_style_images(
     State(state): State<AppState>,
     Path(style_id): Path<Uuid>,
+    Query(q): Query<StyleImagesListQuery>,
 ) -> Result<Json<Value>, crate::error::AppError> {
     let images: Vec<StyleImageRecord> = sqlx::query_as(
         r#"SELECT id, org_id, dept_id, style_id, image_path, file_type,
                   uploaded_by, created_at
            FROM style_images
-           WHERE style_id = $1
+           WHERE style_id = $1 AND org_id = $2 AND dept_id = $3
            ORDER BY created_at DESC"#,
     )
     .bind(style_id)
+    .bind(q.org_id)
+    .bind(q.dept_id)
     .fetch_all(state.session_store.pool())
     .await?;
 
     Ok(Json(serde_json::json!({ "images": images, "total": images.len() })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StyleImagesListQuery {
+    org_id: Uuid,
+    dept_id: Uuid,
 }

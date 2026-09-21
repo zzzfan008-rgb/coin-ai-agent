@@ -4,7 +4,7 @@
 -- 描述: 面料库表
 -- =============================================================================
 
-CREATE TABLE fabrics (
+CREATE TABLE IF NOT EXISTS fabrics (
     id                  UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     org_id              UUID            NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
     dept_id             UUID            NOT NULL REFERENCES depts(id) ON DELETE CASCADE,
@@ -27,4 +27,4 @@ COMMENT ON COLUMN fabrics.applicable_styles IS '适用款式标签';
 COMMENT ON COLUMN fabrics.care_instructions IS '保养说明';
 COMMENT ON COLUMN fabrics.features IS '面料特性';
 
-CREATE INDEX idx_fabrics_org_dept ON fabrics(org_id, dept_id);
+CREATE INDEX IF NOT EXISTS idx_fabrics_org_dept ON fabrics(org_id, dept_id);

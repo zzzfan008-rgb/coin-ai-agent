@@ -56,9 +56,10 @@ impl QdrantStore {
             return Ok(()); // already exists
         }
 
-        let create_url = format!("{}/collections", self.base_url);
+        // Qdrant creates a collection at PUT /collections/{name}
+        // (PUT /collections with a body returns 404).
+        let create_url = format!("{}/collections/{}", self.base_url, self.collection);
         let body = serde_json::json!({
-            "name": self.collection,
             "vectors": {
                 "size": vector_dim,
                 "distance": "Cosine",
