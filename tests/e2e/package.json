@@ -1,0 +1,18 @@
+{
+  "name": "fashion-ai-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Fashion AI Platform Phase 1A E2E tests (Playwright + MSW mock)",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report",
+    "typecheck": "tsc --noEmit",
+    "gate": "node scripts/run-gate.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.2",
+    "@types/node": "^22.7.5",
+    "typescript": "~5.6.2"
+  }
+}
