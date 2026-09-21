@@ -79,9 +79,9 @@ pub struct QdrantSearchResult {
 pub struct RagConfig {
     pub qdrant_url: String,
     pub qdrant_collection: String,
-    pub deepseek_api_key: String,
+    pub embedding_api_key: String,
     /// OpenAI-compatible base URL (without trailing `/embeddings`).
-    pub deepseek_base_url: String,
+    pub embedding_base_url: String,
     pub embedding_model: String,
     /// Expected embedding dimension.
     pub embedding_dim: usize,
@@ -100,12 +100,15 @@ impl Default for RagConfig {
                 .unwrap_or_else(|_| "http://localhost:6333".into()),
             qdrant_collection: std::env::var("QDRANT_COLLECTION")
                 .unwrap_or_else(|_| "fashion_knowledge".into()),
-            deepseek_api_key: std::env::var("DEEPSEEK_API_KEY").unwrap_or_default(),
-            deepseek_base_url: std::env::var("DEEPSEEK_BASE_URL")
-                .unwrap_or_else(|_| "https://api.deepseek.com/v1".into()),
+            embedding_api_key: first_present(&["EMBEDDING_API_KEY", "DASHSCOPE_API_KEY"]),
+            embedding_base_url: std::env::var("EMBEDDING_BASE_URL")
+                .unwrap_or_else(|_| "https://maas.qianwenaiapi.com/compatible-mode/v1".into()),
             embedding_model: std::env::var("EMBEDDING_MODEL")
-                .unwrap_or_else(|_| "deepseek-embedding".into()),
-            embedding_dim: 1536,
+                .unwrap_or_else(|_| "text-embedding-v3".into()),
+            embedding_dim: std::env::var("EMBEDDING_DIM")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1024),
             chunk_size: 500,
             chunk_overlap: 50,
             upsert_batch_size: 32,
@@ -114,16 +117,46 @@ impl Default for RagConfig {
     }
 }
 
+fn first_present(keys: &[&str]) -> String {
+    for k in keys {
+        if let Ok(v) = std::env::var(k) {
+            if !v.is_empty() {
+                return v;
+            }
+        }
+    }
+    String::new()
+}
+
 impl RagConfig {
     /// Build RAG config from the global [`AppConfig`](crate::config::AppConfig).
+    /// Embedding is provider-agnostic: defaults to the configured Qwen/DashScope
+    /// endpoint and can be overridden with EMBEDDING_* environment variables.
     pub fn from_app_config(cfg: &crate::config::AppConfig) -> Self {
+        let env_default = Self::default();
         Self {
             qdrant_url: cfg.qdrant_url.clone(),
             qdrant_collection: "fashion_knowledge".into(),
-            deepseek_api_key: cfg.deepseek_api_key.clone(),
-            deepseek_base_url: cfg.deepseek_base_url.clone(),
-            embedding_model: "deepseek-embedding".into(),
-            embedding_dim: 1536,
+            embedding_api_key: if env_default.embedding_api_key.is_empty() {
+                cfg.qwen_api_key.clone()
+            } else {
+                env_default.embedding_api_key
+            },
+            embedding_base_url: if std::env::var("EMBEDDING_BASE_URL").is_ok() {
+                env_default.embedding_base_url
+            } else {
+                cfg.qwen_base_url.clone()
+            },
+            embedding_model: if std::env::var("EMBEDDING_MODEL").is_ok() {
+                env_default.embedding_model
+            } else {
+                "text-embedding-v3".into()
+            },
+            embedding_dim: if std::env::var("EMBEDDING_DIM").is_ok() {
+                env_default.embedding_dim
+            } else {
+                1024
+            },
             chunk_size: 500,
             chunk_overlap: 50,
             upsert_batch_size: 32,
@@ -147,8 +180,8 @@ impl RagRetriever {
     /// Build all sub-services from config.
     pub fn new(config: RagConfig) -> Self {
         let embedding = EmbeddingService::new(
-            config.deepseek_api_key.clone(),
-            config.deepseek_base_url.clone(),
+            config.embedding_api_key.clone(),
+            config.embedding_base_url.clone(),
             config.embedding_model.clone(),
         );
         let store = QdrantStore::new(&config.qdrant_url, &config.qdrant_collection);

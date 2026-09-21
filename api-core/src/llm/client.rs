@@ -23,13 +23,14 @@ use crate::error::{AppError, Result};
 use super::messages::ChatMessage;
 use super::tools::ToolDefinition;
 
-/// Unified LLM client wrapping MiniMax and DeepSeek.
+/// Unified LLM client wrapping MiniMax, DeepSeek and Qwen.
 #[derive(Clone)]
 pub struct LlmClient {
     http: Client,
     default_provider: String,
     minimax: LlmProvider,
     deepseek: LlmProvider,
+    qwen: LlmProvider,
     /// Timeout in seconds (from config).
     timeout_secs: u64,
 }
@@ -61,12 +62,18 @@ impl LlmClient {
             model: config.deepseek_model.clone(),
             base_url: config.deepseek_base_url.clone(),
         };
+        let qwen = LlmProvider {
+            api_key: config.qwen_api_key.clone(),
+            model: config.qwen_model.clone(),
+            base_url: config.qwen_base_url.clone(),
+        };
 
         let default_provider = config.llm_provider.clone();
 
         // Fail-fast: the default provider MUST have an API key.
         let active = match default_provider.as_str() {
             "deepseek" => &deepseek,
+            "qwen" => &qwen,
             _ => &minimax,
         };
         if active.api_key.is_empty() {
@@ -77,12 +84,13 @@ impl LlmClient {
                 default_provider,
                 match default_provider.as_str() {
                     "deepseek" => "DEEPSEEK_API_KEY",
+                    "qwen" => "DASHSCOPE_API_KEY",
                     _ => "MINIMAX_API_KEY",
                 }
             );
         }
 
-        Ok(Self { http, default_provider, minimax, deepseek, timeout_secs })
+        Ok(Self { http, default_provider, minimax, deepseek, qwen, timeout_secs })
     }
 
     /// Return the provider and model to use for a given model name.
@@ -95,10 +103,13 @@ impl LlmClient {
             (&self.deepseek, model.to_string())
         } else if model.starts_with("minimax") || model.starts_with("MiniMax") {
             (&self.minimax, model.to_string())
+        } else if model.starts_with("qwen") {
+            (&self.qwen, model.to_string())
         } else {
             // Use default provider.
             match self.default_provider.as_str() {
                 "deepseek" => (&self.deepseek, model.to_string()),
+                "qwen" => (&self.qwen, model.to_string()),
                 _ => (&self.minimax, model.to_string()),
             }
         }
@@ -297,6 +308,7 @@ impl LlmClient {
     pub async fn health_check_provider(&self, provider_name: &str) -> bool {
         let provider = match provider_name {
             "deepseek" => &self.deepseek,
+            "qwen" => &self.qwen,
             _ => &self.minimax,
         };
 
@@ -330,6 +342,10 @@ impl LlmClient {
         result.insert(
             "deepseek".to_string(),
             self.health_check_provider("deepseek").await,
+        );
+        result.insert(
+            "qwen".to_string(),
+            self.health_check_provider("qwen").await,
         );
         result
     }
@@ -475,6 +491,9 @@ mod tests {
             deepseek_api_key: deepseek_key.into(),
             deepseek_model: "deepseek-chat".into(),
             deepseek_base_url: "https://api.deepseek.com/v1".into(),
+            qwen_api_key: String::new(),
+            qwen_model: "qwen-plus".into(),
+            qwen_base_url: "https://maas.qianwenaiapi.com/compatible-mode/v1".into(),
             minio_endpoint: String::new(),
             minio_bucket: String::new(),
             minio_access_key: String::new(),

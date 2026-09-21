@@ -21,7 +21,7 @@ pub struct AppConfig {
     pub core_port: u16,
 
     // LLM
-    pub llm_provider: String, // "minimax" | "deepseek"
+    pub llm_provider: String, // "minimax" | "deepseek" | "qwen"
     pub llm_timeout_secs: u64,
 
     // MiniMax
@@ -33,6 +33,11 @@ pub struct AppConfig {
     pub deepseek_api_key: String,
     pub deepseek_model: String,
     pub deepseek_base_url: String,
+
+    // Qwen / Alibaba DashScope (OpenAI-compatible)
+    pub qwen_api_key: String,
+    pub qwen_model: String,
+    pub qwen_base_url: String,
 
     // MinIO
     pub minio_endpoint: String,
@@ -74,6 +79,13 @@ impl AppConfig {
             deepseek_model: env_var("DEEPSEEK_MODEL", "deepseek-chat"),
             deepseek_base_url: env_var("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
 
+            qwen_api_key: first_var(&["DASHSCOPE_API_KEY", "QWEN_API_KEY"], ""),
+            qwen_model: env_var("QWEN_MODEL", "qwen-plus"),
+            qwen_base_url: env_var(
+                "QWEN_BASE_URL",
+                "https://maas.qianwenaiapi.com/compatible-mode/v1",
+            ),
+
             minio_endpoint: env_var("MINIO_ENDPOINT", "http://localhost:9000"),
             minio_bucket: env_var("MINIO_BUCKET", "fashion-ai"),
             minio_access_key: env_var("MINIO_ROOT_USER", "minioadmin"),
@@ -84,6 +96,18 @@ impl AppConfig {
 
 fn env_var(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+/// Return the first present, non-empty variable among `keys`.
+fn first_var(keys: &[&str], default: &str) -> String {
+    for k in keys {
+        if let Ok(v) = std::env::var(k) {
+            if !v.is_empty() {
+                return v;
+            }
+        }
+    }
+    default.to_string()
 }
 
 fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {

@@ -25,6 +25,18 @@ use anyhow::{bail, Context, Result};
 use reqwest::Client;
 use serde_json::Value;
 
+/// Request/response dialect used by the client.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClipMode {
+    /// Generic OpenAI/Jina-style single endpoint: `{model, image|text}`.
+    Generic,
+    /// Alibaba DashScope `multimodal-embedding-v1`:
+    /// `POST {host}/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding`
+    /// body `{model, input:{contents:[{image|text}]}}`, response
+    /// `output.embeddings[].embedding`.
+    DashScope,
+}
+
 /// Client for a remote CLIP image/text embedding service.
 #[derive(Clone)]
 pub struct ClipClient {
@@ -32,19 +44,30 @@ pub struct ClipClient {
     endpoint: String,
     api_key: String,
     model: String,
+    mode: ClipMode,
 }
 
 impl ClipClient {
     /// Build from `CLIP_API_*` environment variables.
     pub fn from_env() -> Self {
+        let mode = match std::env::var("CLIP_PROVIDER").unwrap_or_default().as_str() {
+            "dashscope" | "qwen" => ClipMode::DashScope,
+            _ => ClipMode::Generic,
+        };
         Self {
             http: Client::builder()
                 .timeout(Duration::from_secs(30))
                 .build()
                 .unwrap_or_default(),
             endpoint: std::env::var("CLIP_API_ENDPOINT").unwrap_or_default(),
-            api_key: std::env::var("CLIP_API_KEY").unwrap_or_default(),
-            model: std::env::var("CLIP_MODEL").unwrap_or_else(|_| "clip-vit-base-patch32".into()),
+            api_key: std::env::var("CLIP_API_KEY")
+                .or_else(|_| std::env::var("DASHSCOPE_API_KEY"))
+                .unwrap_or_default(),
+            model: std::env::var("CLIP_MODEL").unwrap_or_else(|_| match mode {
+                ClipMode::DashScope => "multimodal-embedding-v1".into(),
+                ClipMode::Generic => "clip-vit-base-patch32".into(),
+            }),
+            mode,
         }
     }
 
@@ -60,20 +83,34 @@ impl ClipClient {
 
     /// Encode an image (raw file bytes, e.g. PNG/JPEG) into a CLIP vector.
     pub async fn encode_image(&self, image_bytes: &[u8]) -> Result<Vec<f32>> {
-        let payload = serde_json::json!({
-            "model": self.model,
-            "image": base64_encode(image_bytes),
-        });
+        let payload = match self.mode {
+            ClipMode::Generic => serde_json::json!({
+                "model": self.model,
+                "image": base64_encode(image_bytes),
+            }),
+            ClipMode::DashScope => serde_json::json!({
+                "model": self.model,
+                "input": {"contents": [
+                    {"image": format!("data:image/jpeg;base64,{}", base64_encode(image_bytes))}
+                ]},
+            }),
+        };
         self.call(payload).await
     }
 
     /// Encode text into the same CLIP vector space (cross-modal text→image
     /// search uses this).
     pub async fn encode_text(&self, text: &str) -> Result<Vec<f32>> {
-        let payload = serde_json::json!({
-            "model": self.model,
-            "text": text,
-        });
+        let payload = match self.mode {
+            ClipMode::Generic => serde_json::json!({
+                "model": self.model,
+                "text": text,
+            }),
+            ClipMode::DashScope => serde_json::json!({
+                "model": self.model,
+                "input": {"contents": [{"text": text}]},
+            }),
+        };
         self.call(payload).await
     }
 
@@ -82,9 +119,17 @@ impl ClipClient {
             bail!("CLIP_API_ENDPOINT is not configured");
         }
 
+        let url = match self.mode {
+            ClipMode::Generic => self.endpoint.clone(),
+            ClipMode::DashScope => format!(
+                "{}/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding",
+                self.endpoint.trim_end_matches('/')
+            ),
+        };
+
         let mut req = self
             .http
-            .post(&self.endpoint)
+            .post(&url)
             .header("Content-Type", "application/json");
         if !self.api_key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", self.api_key));
@@ -107,8 +152,28 @@ impl ClipClient {
             .await
             .context("Failed to decode CLIP response")?;
 
-        parse_embedding(&json)
+        match self.mode {
+            ClipMode::Generic => parse_embedding(&json),
+            ClipMode::DashScope => parse_dashscope_embedding(&json),
+        }
     }
+}
+
+// ── DashScope response parsing ────────────────────────────────────────────────
+
+/// Extract vectors from `{"output":{"embeddings":[{"embedding":[..]}]}}`.
+pub fn parse_dashscope_embedding(json: &Value) -> Result<Vec<f32>> {
+    let emb = json
+        .get("output")
+        .and_then(|o| o.get("embeddings"))
+        .and_then(|e| e.as_array())
+        .and_then(|a| a.first())
+        .and_then(|e| e.get("embedding"))
+        .ok_or_else(|| {
+            anyhow::anyhow!("DashScope response missing output.embeddings[0].embedding")
+        })?;
+    let v = json_to_vec(emb)?;
+    Ok(v)
 }
 
 // ── Response parsing ──────────────────────────────────────────────────────────
@@ -300,6 +365,21 @@ mod tests {
     fn rejects_empty_vector() {
         let json = serde_json::json!({ "embedding": [] });
         assert!(parse_embedding(&json).is_err());
+    }
+
+    #[test]
+    fn parses_dashscope_multimodal_response() {
+        let json = serde_json::json!({
+            "output": {"embeddings": [{"embedding": fake_vector(1024)}]},
+            "request_id": "x",
+        });
+        assert_eq!(parse_dashscope_embedding(&json).unwrap().len(), 1024);
+    }
+
+    #[test]
+    fn rejects_dashscope_shape_without_output() {
+        let json = serde_json::json!({"data": [{"embedding": fake_vector(512)}]});
+        assert!(parse_dashscope_embedding(&json).is_err());
     }
 
     #[test]
