@@ -94,11 +94,7 @@ export default function Chat() {
 
       void (async () => {
         try {
-          const results = await searchSimilarImages(
-            file,
-            user.org_id,
-            user.dept_id,
-          )
+          const results = await searchSimilarImages(file)
           setSimilarPanel({ queryUrl, results, loading: false, error: null })
         } catch (e) {
           setSimilarPanel({

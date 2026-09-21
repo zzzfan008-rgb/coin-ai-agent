@@ -300,20 +300,17 @@ export interface SimilarImage {
   similarity: number
 }
 
-/** 以图搜图：multipart 上传一张图片，返回 Top-K 相似款式图 */
+/** 以图搜图：multipart 上传一张图片，返回 Top-K 相似款式图。
+ *  org/dept 由网关从 JWT 注入（X-Auth-*），前端不传身份字段。 */
 export async function searchSimilarImages(
   file: File,
-  orgId: string,
-  deptId: string,
   topK = 8,
 ): Promise<SimilarImage[]> {
   const form = new FormData()
   form.append('file', file)
-  form.append('org_id', orgId)
-  form.append('dept_id', deptId)
   form.append('top_k', String(topK))
 
-  const res = await fetch('/internal/images/similar', {
+  const res = await fetch('/api/images/similar', {
     method: 'POST',
     headers: authHeaders(),
     body: form,

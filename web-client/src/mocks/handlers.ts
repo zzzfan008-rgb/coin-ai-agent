@@ -607,7 +607,7 @@ export const handlers = [
   }),
 
   // ── 以图搜图（T-019 CLIP） ────────────────────────────────────────────────
-  http.post('*/internal/images/similar', async ({ request }) => {
+  http.post('*/api/images/similar', async ({ request }) => {
     const user = authenticate(request)
     if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
 

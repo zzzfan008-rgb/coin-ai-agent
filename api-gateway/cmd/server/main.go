@@ -216,6 +216,28 @@ func main() {
 		api.HandleFunc("/mcp/servers/{id}", mcpH2.Delete).Methods(http.MethodDelete)
 		api.HandleFunc("/mcp/servers/{id}/user", mcpH2.ToggleUser).Methods(http.MethodPut)
 
+		// Core-backed endpoints (transparent reverse proxy; identity injected
+		// from JWT as X-Auth-* headers). These proxy to the same paths on core.
+		coreProxy := handler.CoreReverseProxy(cfg.RustCoreURL)
+		api.PathPrefix("/knowledge/documents").Handler(coreProxy)
+		api.PathPrefix("/styles").Handler(coreProxy)
+		// Search endpoints: public path → core internal path.
+		api.HandleFunc("/knowledge/search",
+			func(w http.ResponseWriter, r *http.Request) {
+				handler.CorePathRewriteProxy(cfg.RustCoreURL, "/internal/knowledge/search").
+					ServeHTTP(w, r)
+			}).Methods(http.MethodPost)
+		// Core MCP tool discovery (single sub-path under the Go-managed group).
+		api.HandleFunc("/mcp/servers/{id}/tools",
+			func(w http.ResponseWriter, r *http.Request) { coreProxy.ServeHTTP(w, r) }).
+			Methods(http.MethodGet)
+		// Public-path image search → core internal endpoint.
+		api.HandleFunc("/images/similar",
+			func(w http.ResponseWriter, r *http.Request) {
+				handler.CorePathRewriteProxy(cfg.RustCoreURL, "/internal/images/similar").
+					ServeHTTP(w, r)
+			}).Methods(http.MethodPost)
+
 		// OpenAI-compatible routes
 		v1 := r.PathPrefix("/v1").Subrouter()
 		v1.Use(jwtMw)

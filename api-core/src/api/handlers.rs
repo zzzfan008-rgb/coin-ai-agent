@@ -635,8 +635,10 @@ fn parse_uuid(field: &str, raw: &str) -> Result<Uuid, crate::error::AppError> {
 #[derive(Debug, Deserialize)]
 pub struct KnowledgeSearchRequest {
     pub query: String,
-    pub org_id: String,
-    pub dept_id: String,
+    #[serde(default)]
+    pub org_id: Option<String>,
+    #[serde(default)]
+    pub dept_id: Option<String>,
     #[serde(default = "default_knowledge_top_k")]
     pub top_k: usize,
 }
@@ -676,6 +678,7 @@ pub struct KnowledgeDocumentResponse {
 /// Embed the query and run an ANN search scoped to the caller's org+dept.
 pub async fn knowledge_search(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<KnowledgeSearchRequest>,
 ) -> Result<Json<KnowledgeSearchResponse>, crate::error::AppError> {
     if req.query.trim().is_empty() {
@@ -684,9 +687,18 @@ pub async fn knowledge_search(
         ));
     }
 
+    // Identity: gateway headers first, request fields for internal calls.
+    let (h_org, h_dept, _) = header_identity(&headers);
+    let org_id = h_org.or(req.org_id).ok_or_else(|| {
+        crate::error::AppError::BadRequest("org_id required".into())
+    })?;
+    let dept_id = h_dept.or(req.dept_id).ok_or_else(|| {
+        crate::error::AppError::BadRequest("dept_id required".into())
+    })?;
+
     // Validate UUIDs up front for clearer error messages.
-    parse_uuid("org_id", &req.org_id)?;
-    parse_uuid("dept_id", &req.dept_id)?;
+    parse_uuid("org_id", &org_id)?;
+    parse_uuid("dept_id", &dept_id)?;
 
     let top_k = req.top_k.clamp(1, 50);
 
@@ -698,7 +710,7 @@ pub async fn knowledge_search(
 
     let hits = state
         .rag_retriever
-        .search(&vector, &req.org_id, &req.dept_id, top_k)
+        .search(&vector, &org_id, &dept_id, top_k)
         .await
         .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
 
@@ -724,10 +736,26 @@ pub async fn knowledge_search(
 
 // ── POST /api/knowledge/documents ────────────────────────────────────────────
 
+/// Extract identity injected by the API gateway from the verified JWT.
+/// Returns (org_id, dept_id, user_id) when present.
+pub fn header_identity(
+    headers: &axum::http::HeaderMap,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let get = |key: &str| {
+        headers
+            .get(key)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    (get("x-auth-org-id"), get("x-auth-dept-id"), get("x-auth-user-id"))
+}
+
 /// Accept a multipart file upload, persist a DB record, and kick off
 /// background indexing (parse → chunk → embed → Qdrant).
 pub async fn upload_knowledge_document(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     mut multipart: Multipart,
 ) -> Result<Json<KnowledgeDocumentResponse>, crate::error::AppError> {
     let mut file_bytes: Vec<u8> = Vec::new();
@@ -766,6 +794,19 @@ pub async fn upload_knowledge_document(
     // Validate inputs.
     if file_bytes.is_empty() {
         return Err(crate::error::AppError::BadRequest("File is empty".into()));
+    }
+
+    // Trust gateway-injected identity over multipart fields (the latter are
+    // only honoured on direct/internal calls without X-Auth-* headers).
+    let (h_org, h_dept, h_user) = header_identity(&headers);
+    if let Some(v) = h_org {
+        org_id_raw = v;
+    }
+    if let Some(v) = h_dept {
+        dept_id_raw = v;
+    }
+    if let Some(v) = h_user {
+        uploaded_by_raw = v;
     }
 
     let org_id = parse_uuid("org_id", &org_id_raw)?;
@@ -1023,6 +1064,9 @@ pub async fn find_similar_images(
         .unwrap_or("")
         .to_lowercase();
 
+    // Gateway-injected identity (preferred over multipart/JSON fields).
+    let (h_org, h_dept, _h_user) = header_identity(request.headers());
+
     let (image_bytes, org_id_raw, dept_id_raw, top_k) =
         if content_type.starts_with("multipart/form-data") {
             let mut multipart = Multipart::from_request(request, &state)
@@ -1078,6 +1122,8 @@ pub async fn find_similar_images(
     if image_bytes.is_empty() {
         return Err(crate::error::AppError::BadRequest("Image is empty".into()));
     }
+    let org_id_raw = h_org.unwrap_or(org_id_raw);
+    let dept_id_raw = h_dept.unwrap_or(dept_id_raw);
     parse_uuid("org_id", &org_id_raw)?;
     parse_uuid("dept_id", &dept_id_raw)?;
     let top_k = top_k.clamp(1, 50);
@@ -1130,22 +1176,38 @@ pub async fn find_similar_images(
 /// spawns CLIP encoding + Qdrant upsert.
 pub async fn upload_style_image(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Path(style_id): Path<Uuid>,
     mut multipart: Multipart,
 ) -> Result<Json<Value>, crate::error::AppError> {
-    // org/dept come from the style row itself.
-    let style_row: (Uuid, Uuid) = sqlx::query_as(
-        "SELECT org_id, dept_id FROM styles WHERE id = $1",
-    )
-    .bind(style_id)
-    .fetch_optional(state.session_store.pool())
-    .await?
-    .ok_or_else(|| crate::error::AppError::NotFound("Style not found".into()))?;
+    // Tenant scope comes from the gateway-injected identity when present.
+    let (h_org, h_dept, h_user) = header_identity(&headers);
+
+    // The style must exist AND belong to the caller's org/dept — otherwise a
+    // user could attach images to another department's styles.
+    let mut q = sqlx::QueryBuilder::new("SELECT org_id, dept_id FROM styles WHERE id = ");
+    q.push_bind(style_id);
+    if let Some(o) = &h_org {
+        if let Ok(oid) = Uuid::parse_str(o) {
+            q.push(" AND org_id = ").push_bind(oid);
+        }
+    }
+    if let Some(d) = &h_dept {
+        if let Ok(did) = Uuid::parse_str(d) {
+            q.push(" AND dept_id = ").push_bind(did);
+        }
+    }
+    let style_row: (Uuid, Uuid) = q
+        .build_query_as()
+        .fetch_optional(state.session_store.pool())
+        .await?
+        .ok_or_else(|| crate::error::AppError::NotFound("Style not found".into()))?;
     let (org_id, dept_id) = style_row;
 
     let mut file_bytes: Vec<u8> = Vec::new();
     let mut original_filename = String::new();
-    let mut uploaded_by: Option<Uuid> = None;
+    let mut uploaded_by: Option<Uuid> =
+        h_user.as_deref().map(Uuid::parse_str).and_then(Result::ok);
 
     while let Some(field) = multipart
         .next_field()
@@ -1162,8 +1224,11 @@ pub async fn upload_style_image(
                     .to_vec();
             }
             "uploaded_by" => {
-                let raw = field.text().await.unwrap_or_default();
-                uploaded_by = Uuid::parse_str(&raw).ok();
+                // Only honour a form-supplied uploader when no gateway header.
+                if h_user.is_none() {
+                    let raw = field.text().await.unwrap_or_default();
+                    uploaded_by = Uuid::parse_str(&raw).ok();
+                }
             }
             _ => {}
         }
@@ -1246,9 +1311,25 @@ pub async fn upload_style_image(
 /// images cannot be enumerated across tenants by style UUID.
 pub async fn list_style_images(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Path(style_id): Path<Uuid>,
     Query(q): Query<StyleImagesListQuery>,
 ) -> Result<Json<Value>, crate::error::AppError> {
+    // Gateway-injected identity wins; query params only for internal calls.
+    let (h_org, h_dept, _) = header_identity(&headers);
+    let org = h_org
+        .as_deref()
+        .map(Uuid::parse_str)
+        .and_then(Result::ok)
+        .or(q.org_id)
+        .ok_or_else(|| crate::error::AppError::BadRequest("org_id required".into()))?;
+    let dept = h_dept
+        .as_deref()
+        .map(Uuid::parse_str)
+        .and_then(Result::ok)
+        .or(q.dept_id)
+        .ok_or_else(|| crate::error::AppError::BadRequest("dept_id required".into()))?;
+
     let images: Vec<StyleImageRecord> = sqlx::query_as(
         r#"SELECT id, org_id, dept_id, style_id, image_path, file_type,
                   uploaded_by, created_at
@@ -1257,8 +1338,8 @@ pub async fn list_style_images(
            ORDER BY created_at DESC"#,
     )
     .bind(style_id)
-    .bind(q.org_id)
-    .bind(q.dept_id)
+    .bind(org)
+    .bind(dept)
     .fetch_all(state.session_store.pool())
     .await?;
 
@@ -1267,6 +1348,8 @@ pub async fn list_style_images(
 
 #[derive(Debug, Deserialize)]
 pub struct StyleImagesListQuery {
-    org_id: Uuid,
-    dept_id: Uuid,
+    #[serde(default)]
+    org_id: Option<Uuid>,
+    #[serde(default)]
+    dept_id: Option<Uuid>,
 }
