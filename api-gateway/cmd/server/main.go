@@ -54,11 +54,10 @@ func main() {
 			// 自动执行 migrations/（唯一权威 schema 路径）；
 			// SKIP_MIGRATIONS=1 可关闭（如容器 entrypoint 已单独迁移）。
 			if os.Getenv("SKIP_MIGRATIONS") != "1" {
-				migRoot := os.Getenv("MIGRATIONS_DIR")
-				if migRoot == "" {
-					migRoot = "migrations"
-				}
-				if err := db.Migrate(ctx, pool, db.Config{MigrationsRoot: migRoot}, slog.Default()); err != nil {
+				migRoot, err := db.ResolveMigrationsRoot()
+				if err != nil {
+					log.Printf("[ERROR] %v — set MIGRATIONS_DIR or fix working directory (continuing in degraded mode)", err)
+				} else if err := db.Migrate(ctx, pool, db.Config{MigrationsRoot: migRoot}, slog.Default()); err != nil {
 					log.Printf("[WARN] auto-migrate failed: %v (continuing in degraded mode)", err)
 				}
 			}

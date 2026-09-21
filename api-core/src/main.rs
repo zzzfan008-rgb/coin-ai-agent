@@ -57,6 +57,32 @@ pub struct AppServices {
     pub image_search: Arc<ImageSearchService>,
 }
 
+/// 定位 skills 目录，按优先级返回首个存在的目录：
+/// SKILLS_DIR → 可执行文件 ../skills、./skills → 工作目录 ./skills、../skills。
+fn resolve_skills_dir() -> std::path::PathBuf {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(dir) = std::env::var("SKILLS_DIR") {
+        candidates.push(dir.into());
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            candidates.push(exe_dir.join("..").join("skills"));
+            candidates.push(exe_dir.join("skills"));
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("skills"));
+        candidates.push(cwd.join("..").join("skills"));
+    }
+    for c in &candidates {
+        if c.is_dir() {
+            return c.clone();
+        }
+    }
+    // 全部不存在：回退到 ./skills，交由 load_from_dir 产生明确错误（fail-fast）。
+    std::path::PathBuf::from("skills")
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // ── Logging ──────────────────────────────────────────────────────────────
@@ -95,11 +121,9 @@ async fn main() -> Result<()> {
     }
 
     // ── SKILL Engine ────────────────────────────────────────────────────────────
-    let project_root = std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-        .canonicalize()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let skills_dir = project_root.join("skills");
+    // 不再只依赖 cwd/skills：按 SKILLS_DIR → 可执行文件相对 → 工作目录相对
+    // 的顺序定位，避免从其它目录启动时找不到 skill。找不到时 load 会 fail-fast。
+    let skills_dir = resolve_skills_dir();
     tracing::info!("Loading skills from {:?}", skills_dir);
 
     let engine = crate::skill_engine::SkillEngine::load_from_dir(&skills_dir)
@@ -190,7 +214,12 @@ async fn main() -> Result<()> {
     }
 
     // ── Intent router (T-014) ──────────────────────────────────────────────
-    let rules_path = project_root.join("api-core/src/intent/rules.yaml");
+    // 路径可由 INTENT_RULES_PATH 覆盖；默认相对仓库根，定位不到时 load_or_embedded
+    // 会回退到编译期内置规则（见 intent 模块）。
+    let rules_path = std::path::PathBuf::from(
+        std::env::var("INTENT_RULES_PATH")
+            .unwrap_or_else(|_| "api-core/src/intent/rules.yaml".to_string()),
+    );
     let intent_router = Arc::new(crate::intent::IntentRouter::load_or_embedded(&rules_path)?);
 
     let services = Arc::new(AppServices {
