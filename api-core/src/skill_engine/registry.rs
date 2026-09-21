@@ -46,7 +46,25 @@ impl ToolRegistry {
 
     /// Build OpenAI `ToolDefinition` list from all registered tools.
     pub fn to_llm_tools(&self) -> Vec<ToolDefinition> {
-        self.by_id.values().map(|t| tool_spec_to_definition(t)).collect()
+        self.by_id.values().map(|t| tool_spec_to_definition(&t.name, t)).collect()
+    }
+
+    /// Build tool definitions only for the given skill ids, with fully
+    /// qualified names `skill_<skill_snake>_<tool>` so the Agent Loop can
+    /// dispatch them (`tool/mod.rs` keys off the `skill_` prefix).
+    /// Unknown skill ids are silently skipped.
+    pub fn to_llm_tools_for_skills(&self, skill_ids: &[String]) -> Vec<ToolDefinition> {
+        let mut out = Vec::new();
+        for sid in skill_ids {
+            let prefix = format!("{sid}:");
+            for (key, spec) in &self.by_id {
+                if key.starts_with(&prefix) {
+                    let qualified = format!("skill_{}_{}", sid.replace('-', "_"), spec.name);
+                    out.push(tool_spec_to_definition(&qualified, spec));
+                }
+            }
+        }
+        out
     }
 
     /// Build OpenAI `ToolDefinition` for a single skill.
@@ -54,13 +72,14 @@ impl ToolRegistry {
         skill
             .tools
             .iter()
-            .map(|t| tool_spec_to_definition(t))
+            .map(|t| tool_spec_to_definition(&t.name, t))
             .collect()
     }
 }
 
-/// Convert a `ToolSpec` (our internal format) into an OpenAI `ToolDefinition`.
-fn tool_spec_to_definition(spec: &ToolSpec) -> ToolDefinition {
+/// Convert a `ToolSpec` (our internal format) into an OpenAI `ToolDefinition`
+/// exposed under `name` (bare or fully-qualified).
+fn tool_spec_to_definition(name: &str, spec: &ToolSpec) -> ToolDefinition {
     use crate::llm::tools::JsonSchema;
 
     let properties: serde_json::Map<String, serde_json::Value> = spec
@@ -95,7 +114,7 @@ fn tool_spec_to_definition(spec: &ToolSpec) -> ToolDefinition {
         .collect();
 
     ToolDefinition::new(
-        &spec.name,
+        name,
         &spec.description,
         JsonSchema {
             type_field: "object".to_string(),

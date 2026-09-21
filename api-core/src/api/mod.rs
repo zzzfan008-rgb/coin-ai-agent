@@ -44,4 +44,22 @@ pub fn routes() -> Router<AppState> {
             "/internal/skills/execute",
             post(handlers::execute_skill),
         )
+        // Knowledge base (RAG)
+        .route(
+            "/internal/knowledge/search",
+            post(handlers::knowledge_search),
+        )
+        .route(
+            "/api/knowledge/documents",
+            post(handlers::upload_knowledge_document),
+        )
+        // MCP servers
+        .route(
+            "/api/mcp/servers",
+            get(handlers::mcp_servers),
+        )
+        .route(
+            "/api/mcp/servers/:id/tools",
+            get(handlers::mcp_server_tools),
+        )
 }

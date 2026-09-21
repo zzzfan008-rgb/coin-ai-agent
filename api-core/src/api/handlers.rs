@@ -2,8 +2,9 @@
 
 use std::sync::Arc;
 
+use sqlx::Row;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -19,6 +20,7 @@ use uuid::Uuid;
 
 use crate::agent::{AgentConfig, AgentEngine};
 use crate::llm::messages::ChatMessage;
+use crate::llm::tools::ToolDefinition;
 use crate::session::{Message, Session};
 use crate::AppServices;
 use crate::AppState;
@@ -154,7 +156,7 @@ pub async fn chat_completions(
         AgentConfig::default(),
         state.llm_client.clone(),
         state.session_store.clone(),
-        None,
+        Some(state.rag_retriever.clone()),
     );
 
     let model = req
@@ -180,11 +182,25 @@ pub async fn chat_completions(
         .as_ref()
         .and_then(|b| b.session_id.clone());
 
+    // Build LLM tool definitions from the requested skill ids.
+    // extra_body.skill_ids: ["fabric-query", ...] → qualified tool names
+    // skill_<skill>_<tool>; absent/empty → no tools exposed.
+    let skill_tools: Option<Vec<ToolDefinition>> = req
+        .extra_body
+        .as_ref()
+        .and_then(|b| b.skill_ids.clone())
+        .filter(|ids| !ids.is_empty())
+        .and_then(|ids| {
+            let guard = crate::skill_engine::SKILL_ENGINE.read().ok()?;
+            let engine = guard.as_ref()?;
+            Some(engine.registry.to_llm_tools_for_skills(&ids))
+        });
+
     let (reply, usage) = match engine
         .run_turn(
             &req.messages,
             model.as_deref(),
-            None,
+            skill_tools.as_deref(),
             &req.user_context,
             collections.as_deref(),
         )
@@ -462,7 +478,7 @@ pub async fn execute_skill(
     }
 
     // Execute
-    let result = match exec_skill(&skill_meta, &req.tool_name, &req.parameters).await {
+    let result = match exec_skill(&skill_meta, &req.tool_name, &req.parameters, &req.user_context).await {
         Ok(r) => r,
         Err(e) => {
             return crate::error::AppError::SkillError(e.to_string()).into_response()
@@ -484,4 +500,281 @@ pub async fn execute_skill(
 fn parse_uuid(field: &str, raw: &str) -> Result<Uuid, crate::error::AppError> {
     Uuid::parse_str(raw)
         .map_err(|_| crate::error::AppError::BadRequest(format!("Invalid {field}")))
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Knowledge Base — RAG search & document upload (T-015)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Schemas ───────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct KnowledgeSearchRequest {
+    pub query: String,
+    pub org_id: String,
+    pub dept_id: String,
+    #[serde(default = "default_knowledge_top_k")]
+    pub top_k: usize,
+}
+
+fn default_knowledge_top_k() -> usize {
+    5
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeSearchResponse {
+    pub query: String,
+    pub results: Vec<KnowledgeHit>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeHit {
+    pub text: String,
+    pub score: f32,
+    pub doc_id: String,
+    pub title: String,
+    pub chunk_index: i32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeDocumentResponse {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub dept_id: Uuid,
+    pub title: String,
+    pub file_type: String,
+    pub file_size: i64,
+    pub status: String,
+}
+
+// ── POST /internal/knowledge/search ──────────────────────────────────────────
+
+/// Embed the query and run an ANN search scoped to the caller's org+dept.
+pub async fn knowledge_search(
+    State(state): State<AppState>,
+    Json(req): Json<KnowledgeSearchRequest>,
+) -> Result<Json<KnowledgeSearchResponse>, crate::error::AppError> {
+    if req.query.trim().is_empty() {
+        return Err(crate::error::AppError::BadRequest(
+            "Query must not be empty".into(),
+        ));
+    }
+
+    // Validate UUIDs up front for clearer error messages.
+    parse_uuid("org_id", &req.org_id)?;
+    parse_uuid("dept_id", &req.dept_id)?;
+
+    let top_k = req.top_k.clamp(1, 50);
+
+    let vector = state
+        .rag_retriever
+        .embed_text(&req.query)
+        .await
+        .map_err(|e| crate::error::AppError::LlmError(e.to_string()))?;
+
+    let hits = state
+        .rag_retriever
+        .search(&vector, &req.org_id, &req.dept_id, top_k)
+        .await
+        .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
+
+    let results: Vec<KnowledgeHit> = hits
+        .into_iter()
+        .map(|h| {
+            let p = &h.payload;
+            KnowledgeHit {
+                text: p.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                score: h.score,
+                doc_id: p.get("doc_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                title: p.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                chunk_index: p.get("chunk_index").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            }
+        })
+        .collect();
+
+    Ok(Json(KnowledgeSearchResponse {
+        query: req.query,
+        results,
+    }))
+}
+
+// ── POST /api/knowledge/documents ────────────────────────────────────────────
+
+/// Accept a multipart file upload, persist a DB record, and kick off
+/// background indexing (parse → chunk → embed → Qdrant).
+pub async fn upload_knowledge_document(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<Json<KnowledgeDocumentResponse>, crate::error::AppError> {
+    let mut file_bytes: Vec<u8> = Vec::new();
+    let mut original_filename = String::new();
+    let mut org_id_raw = String::new();
+    let mut dept_id_raw = String::new();
+    let mut title = String::new();
+    let mut uploaded_by_raw = String::new();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| crate::error::AppError::BadRequest(format!("Invalid multipart: {e}")))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "file" => {
+                original_filename = field
+                    .file_name()
+                    .unwrap_or("uploaded")
+                    .to_string();
+                let data = field
+                    .bytes()
+                    .await
+                    .map_err(|e| crate::error::AppError::BadRequest(format!("Read file: {e}")))?;
+                file_bytes = data.to_vec();
+            }
+            "org_id" => org_id_raw = field.text().await.unwrap_or_default(),
+            "dept_id" => dept_id_raw = field.text().await.unwrap_or_default(),
+            "title" => title = field.text().await.unwrap_or_default(),
+            "uploaded_by" => uploaded_by_raw = field.text().await.unwrap_or_default(),
+            _ => {} // ignore unknown fields
+        }
+    }
+
+    // Validate inputs.
+    if file_bytes.is_empty() {
+        return Err(crate::error::AppError::BadRequest("File is empty".into()));
+    }
+
+    let org_id = parse_uuid("org_id", &org_id_raw)?;
+    let dept_id = parse_uuid("dept_id", &dept_id_raw)?;
+    let uploaded_by = if uploaded_by_raw.is_empty() {
+        None
+    } else {
+        Some(parse_uuid("uploaded_by", &uploaded_by_raw)?)
+    };
+
+    // Derive file type from extension.
+    let file_type = std::path::Path::new(&original_filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .filter(|e| matches!(e.as_str(), "pdf" | "docx" | "txt" | "md"))
+        .ok_or_else(|| {
+            crate::error::AppError::BadRequest(
+                "Unsupported file type — allowed: pdf, docx, txt, md".into(),
+            )
+        })?;
+
+    if title.is_empty() {
+        // Fall back to filename without extension.
+        title = std::path::Path::new(&original_filename)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Untitled")
+            .to_string();
+    }
+
+    let file_size = file_bytes.len() as i64;
+
+    // Persist the uploaded file to a local directory.
+    // NOTE: In production this will be replaced by a MinIO put_object call;
+    // the file_path column stores the object key.
+    let doc_id = Uuid::new_v4();
+    let upload_dir = std::path::Path::new("uploads/knowledge");
+    tokio::fs::create_dir_all(upload_dir)
+        .await
+        .map_err(|e| crate::error::AppError::Internal(format!("Create upload dir: {e}")))?;
+    let local_path = upload_dir.join(format!("{doc_id}.{file_type}"));
+    tokio::fs::write(&local_path, &file_bytes)
+        .await
+        .map_err(|e| crate::error::AppError::Internal(format!("Write file: {e}")))?;
+
+    let file_path = local_path.to_string_lossy().to_string();
+
+    // Insert DB record (status=pending).
+    let row = sqlx::query(
+        r#"INSERT INTO knowledge_documents
+               (id, org_id, dept_id, title, file_type, file_path, file_size, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           RETURNING id, org_id, dept_id, title, file_type, file_size, status"#,
+    )
+    .bind(doc_id)
+    .bind(org_id)
+    .bind(dept_id)
+    .bind(&title)
+    .bind(&file_type)
+    .bind(&file_path)
+    .bind(file_size)
+    .bind(uploaded_by)
+    .fetch_one(state.session_store.pool())
+    .await?;
+
+    // Spawn background indexing. The task owns its own clones so the HTTP
+    // request can return immediately.
+    let pool = state.session_store.pool().clone();
+    let retriever = state.rag_retriever.clone();
+    let doc_id_str = doc_id.to_string();
+    let org_id_str = org_id.to_string();
+    let dept_id_str = dept_id.to_string();
+    let title_clone = title.clone();
+    let bytes_clone = file_bytes.clone();
+    let ftype_clone = file_type.clone();
+
+    tokio::spawn(async move {
+        match crate::rag::DocumentIndexer::index_document(
+            &retriever,
+            &doc_id_str,
+            &org_id_str,
+            &dept_id_str,
+            &title_clone,
+            &bytes_clone,
+            &ftype_clone,
+            &pool,
+        )
+        .await
+        {
+            Ok(n) => tracing::info!(%doc_id_str, chunks = n, "Background indexing finished"),
+            Err(e) => tracing::error!(%doc_id_str, "Background indexing failed: {e}"),
+        }
+    });
+
+    Ok(Json(KnowledgeDocumentResponse {
+        id: row.get("id"),
+        org_id: row.get("org_id"),
+        dept_id: row.get("dept_id"),
+        title: row.get("title"),
+        file_type: row.get("file_type"),
+        file_size: row.get("file_size"),
+        status: row.get("status"),
+    }))
+}
+
+// ── GET /api/mcp/servers/:id/tools ───────────────────────────────────────────
+
+/// List the tools exposed by a registered MCP server.
+pub async fn mcp_server_tools(
+    State(_state): State<AppState>,
+    Path(server_id): Path<String>,
+) -> Result<Json<serde_json::Value>, crate::error::AppError> {
+    let tools = crate::mcp::MCP_MANAGER
+        .list_tools(&server_id)
+        .await
+        .map_err(|e| crate::error::AppError::NotFound(e.to_string()))?;
+    Ok(Json(serde_json::json!({
+        "server_id": server_id,
+        "tools": tools,
+    })))
+}
+
+// ── GET /api/mcp/servers ─────────────────────────────────────────────────────
+
+/// List all registered MCP server IDs plus their health status.
+pub async fn mcp_servers(
+    State(_state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let health = crate::mcp::MCP_MANAGER.health_check().await;
+    let servers: Vec<serde_json::Value> = health
+        .into_iter()
+        .map(|(id, healthy)| serde_json::json!({ "id": id, "healthy": healthy }))
+        .collect();
+    Json(serde_json::json!({ "servers": servers }))
 }

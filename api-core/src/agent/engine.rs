@@ -27,7 +27,7 @@ pub struct TurnUsage {
     pub total_tokens: usize,
 }
 
-use super::rag::RagRetriever;
+use crate::rag;
 
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
@@ -51,7 +51,7 @@ pub struct AgentEngine {
     llm: Arc<LlmClient>,
     #[allow(dead_code)]
     session_store: Arc<SessionStore>,
-    rag: Option<Arc<RagRetriever>>,
+    rag: Option<Arc<rag::RagRetriever>>,
 }
 
 impl AgentEngine {
@@ -59,7 +59,7 @@ impl AgentEngine {
         config: AgentConfig,
         llm: Arc<LlmClient>,
         session_store: Arc<SessionStore>,
-        rag: Option<Arc<RagRetriever>>,
+        rag: Option<Arc<rag::RagRetriever>>,
     ) -> Self {
         Self { config, llm, session_store, rag }
     }
@@ -78,7 +78,11 @@ impl AgentEngine {
         let mut total_usage = TurnUsage::default();
 
         for turn in 1..=self.config.max_turns {
-            self.maybe_inject_rag_context(&mut conversation, knowledge_collections)
+            self.maybe_inject_rag_context(
+                &mut conversation,
+                knowledge_collections,
+                user_ctx,
+            )
                 .await;
 
             let response = self
@@ -145,15 +149,22 @@ impl AgentEngine {
         &self,
         conversation: &mut Vec<ChatMessage>,
         collections: Option<&[String]>,
+        user_ctx: &UserContext,
     ) {
         let (Some(rag), Some(colls)) = (&self.rag, collections) else {
             return;
         };
+        if colls.is_empty() {
+            return;
+        }
         let Some(idx) = conversation.iter().rposition(|m| m.role == "user") else {
             return;
         };
         let original = conversation[idx].content.clone().unwrap_or_default();
-        let context = rag.retrieve(&original, colls).await.unwrap_or_default();
+        let context = rag
+            .retrieve(&original, &user_ctx.org_id, &user_ctx.dept_id, 5)
+            .await
+            .unwrap_or_default();
         if context.is_empty() {
             return;
         }
@@ -179,7 +190,10 @@ async fn execute_single_tool(tool_call: &ToolCall, user_ctx: &UserContext) -> Re
     middleware::pre_tool_call_check(user_ctx, &tool_name, &arguments).await?;
 
     tracing::info!(tool = %tool_name, "Executing tool");
-    let content = crate::tool::execute_tool(&tool_name, &arguments, user_ctx).await?;
+    let store = crate::skill_engine::FASHION_STORE
+        .get()
+        .ok_or_else(|| AppError::Internal("FashionStore not initialised".into()))?;
+    let content = crate::tool::execute_tool(&tool_name, &arguments, user_ctx, store).await?;
 
     Ok(ToolResult {
         tool_call_id: tool_call.id.clone(),

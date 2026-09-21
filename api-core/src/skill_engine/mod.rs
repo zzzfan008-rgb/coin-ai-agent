@@ -12,7 +12,9 @@
 //! - `execute_skill()`      — permission check + execution for POST /internal/skills/execute
 //! - `route_tool_call()`    — called from Agent Loop to handle LLM tool_calls
 
+pub mod color_theory;
 pub mod executor;
+pub mod fashion_db;
 pub mod loader;
 pub mod permissions;
 pub mod registry;
@@ -22,6 +24,7 @@ use std::sync::RwLock;
 use serde::{Deserialize, Serialize};
 
 pub use executor::{execute_skill, route_tool_call};
+pub use fashion_db::FashionStore;
 pub use loader::SkillLoader;
 pub use permissions::check_skill_permission;
 pub use registry::ToolRegistry;
@@ -29,6 +32,10 @@ pub use registry::ToolRegistry;
 /// Global skill engine — loaded once at startup, shared across all request handlers.
 pub static SKILL_ENGINE: once_cell::sync::Lazy<RwLock<Option<SkillEngine>>> =
     once_cell::sync::Lazy::new(|| RwLock::new(None));
+
+/// Global fashion DB store — initialised in main, used by detached executor.
+pub static FASHION_STORE: once_cell::sync::OnceCell<FashionStore> =
+    once_cell::sync::OnceCell::new();
 
 pub struct SkillEngine {
     pub loader: SkillLoader,

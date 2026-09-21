@@ -20,11 +20,14 @@ mod tool;
 mod skill;
 mod skill_engine;
 mod mcp;
+mod rag;
 mod session;
 mod middleware;
+mod rbac;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use axum::Router;
@@ -35,6 +38,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 
 use crate::config::AppConfig;
 use crate::llm::LlmClient;
+use crate::rag::{RagConfig, RagRetriever};
+use crate::rbac::RbacService;
 use crate::session::SessionStore;
 
 pub type AppState = Arc<AppServices>;
@@ -43,6 +48,8 @@ pub struct AppServices {
     pub config: AppConfig,
     pub session_store: Arc<SessionStore>,
     pub llm_client: Arc<LlmClient>,
+    pub rbac: Arc<RbacService>,
+    pub rag_retriever: Arc<RagRetriever>,
 }
 
 #[tokio::main]
@@ -100,10 +107,75 @@ async fn main() -> Result<()> {
         *global = Some(engine);
     }
 
+    // ── RBAC (Casbin) ─────────────────────────────────────────────────────────
+    let rbac = Arc::new(RbacService::new().await?);
+    // Publish the process-global used by detached agent-loop functions.
+    // RbacService is backed by an Arc, so this clone is cheap.
+    crate::rbac::RBAC_SERVICE
+        .set((*rbac).clone())
+        .map_err(|_| anyhow::anyhow!("RBAC_SERVICE already initialised"))?;
+
+    // ── Fashion DB store (global for detached executors) ─────────────────────
+    let fashion_store = crate::skill_engine::FashionStore::new(session_store.pool().clone());
+    crate::skill_engine::FASHION_STORE
+        .set(fashion_store)
+        .map_err(|_| anyhow::anyhow!("FASHION_STORE already initialised"))?;
+
+    // ── RAG (embedding + Qdrant) ────────────────────────────────────────────
+    let rag_config = RagConfig::from_app_config(&config);
+    let rag_retriever = Arc::new(RagRetriever::new(rag_config));
+
+    // Ensure the Qdrant collection exists; log but don't block startup.
+    if let Err(e) = rag_retriever.ensure_collection().await {
+        tracing::warn!("Qdrant collection init failed: {e} — indexing will retry");
+    }
+
+    // ── MCP clients ─────────────────────────────────────────────────────────
+    // Auto-register any MCP servers passed via MCP_SERVERS env var.
+    // Format: id1=http://host:port,id2=http://host:port
+    // The local mock server is registered automatically when running with
+    // APP_ENV=development and scripts/mock_mcp_server.py is reachable.
+    if let Ok(spec) = std::env::var("MCP_SERVERS") {
+        for entry in spec.split(',') {
+            if let Some((id, url)) = entry.split_once('=') {
+                let cfg = crate::mcp::McpServerConfig {
+                    id: id.trim().to_string(),
+                    name: id.trim().to_string(),
+                    base_url: url.trim().trim_end_matches('/').to_string(),
+                    auth_token: None,
+                };
+                crate::mcp::MCP_MANAGER.register(cfg).await;
+            }
+        }
+    }
+    // In development, also probe the local mock server and register it
+    // if it's listening (failure is silent — mock server may not be running).
+    if config.app_env == "development" {
+        let mock_url = "http://localhost:9101";
+        let probe = reqwest::Client::new()
+            .get(format!("{mock_url}/health"))
+            .timeout(Duration::from_millis(500))
+            .send()
+            .await;
+        if probe.is_ok_and(|r| r.status().is_success()) {
+            crate::mcp::MCP_MANAGER
+                .register(crate::mcp::McpServerConfig {
+                    id: "local-mock".into(),
+                    name: "Local Mock MCP".into(),
+                    base_url: mock_url.into(),
+                    auth_token: None,
+                })
+                .await;
+            tracing::info!("Registered local mock MCP server at {mock_url}");
+        }
+    }
+
     let services = Arc::new(AppServices {
         config,
         session_store,
         llm_client,
+        rbac,
+        rag_retriever,
     });
 
     // ── Router ──────────────────────────────────────────────────────────────

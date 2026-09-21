@@ -1,0 +1,16 @@
+# =============================================================================
+# Fashion AI Platform — Casbin RBAC Policies (T-017)
+# Format: p, user_id, role, dept_id, resource, action
+# "*" is a wildcard for that field.
+# =============================================================================
+
+# Admin — full access to every resource/action regardless of user/dept.
+p, *, admin, *, *, *
+
+# Designer — can execute the fashion design skills.
+p, *, designer, *, skill:fabric-query, execute
+p, *, designer, *, skill:color-matching, execute
+p, *, designer, *, skill:style-inspiration, execute
+
+# Viewer — read-only access to conversation data.
+p, *, viewer, *, data:conversations, read

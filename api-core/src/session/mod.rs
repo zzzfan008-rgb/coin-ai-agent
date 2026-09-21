@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::error::{AppError, Result};
 
 pub struct SessionStore {
-    pool: PgPool,
+    pub(super) pool: PgPool,
 }
 
 impl SessionStore {
@@ -29,6 +29,12 @@ impl SessionStore {
     pub async fn migrate(&self) -> Result<()> {
         sqlx::query("SELECT 1").execute(&self.pool).await?;
         Ok(())
+    }
+
+    /// Shared connection pool — lets other stores (e.g. `FashionStore`)
+    /// reuse the same pool without opening a second connection pool.
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
     }
 
     // ── Sessions ───────────────────────────────────────────────────────────────

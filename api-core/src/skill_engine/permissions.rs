@@ -26,15 +26,34 @@ pub fn check_skill_permission(
     user_ctx: &UserContext,
     skill_meta: &SkillMetadata,
 ) -> Result<()> {
+    let required = format!("skill:{}", skill_meta.id);
+
+    // Prefer real Casbin enforcement when the enforcer is initialised (T-017).
+    if let Some(rbac) = crate::rbac::service() {
+        let allowed = rbac.check_permission(
+            &user_ctx.user_id,
+            &user_ctx.role,
+            &user_ctx.dept_id,
+            &required,
+            "execute",
+        );
+        return if allowed {
+            Ok(())
+        } else {
+            Err(AppError::Forbidden(format!(
+                "User '{}' (role: '{}') is not allowed to execute skill '{}'",
+                user_ctx.user_id, user_ctx.role, skill_meta.id
+            )))
+        };
+    }
+
+    // Fallback (enforcer not yet initialised): legacy flat allowlist.
     // Admin always allowed.
     if user_ctx.role == "admin" {
         return Ok(());
     }
 
-    let required = format!("skill:{}", skill_meta.id);
-
-    // Build the user's permission set.
-    // Phase 1B: read from user_ctx.extra_permissions (serde default if absent).
+    // Build the user's permission set from extra_permissions.
     let user_permissions: HashSet<String> = user_ctx
         .extra_permissions
         .iter()
@@ -45,7 +64,7 @@ pub fn check_skill_permission(
         tracing::debug!(
             user_id = %user_ctx.user_id,
             skill_id = %skill_meta.id,
-            "Skill permission granted"
+            "Skill permission granted (fallback allowlist)"
         );
         Ok(())
     } else {
@@ -54,7 +73,7 @@ pub fn check_skill_permission(
             role = %user_ctx.role,
             skill_id = %skill_meta.id,
             required_permission = %required,
-            "Skill permission denied"
+            "Skill permission denied (fallback allowlist)"
         );
         Err(AppError::Forbidden(format!(
             "User '{}' (role: '{}') lacks permission '{}' required to invoke skill '{}'",

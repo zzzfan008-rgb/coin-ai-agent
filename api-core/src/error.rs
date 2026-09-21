@@ -34,6 +34,9 @@ pub enum AppError {
     #[error("HTTP error: {0}")]
     HttpError(#[from] reqwest::Error),
 
+    #[error("Serialization error: {0}")]
+    SerializationError(#[from] serde_json::Error),
+
     #[error("Internal error: {0}")]
     Internal(String),
 
@@ -70,6 +73,9 @@ impl IntoResponse for AppError {
             }
             AppError::SkillError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "SKILL_ERROR", msg.clone()),
             AppError::CasbinError(msg) => (StatusCode::FORBIDDEN, "CASBIN_ERROR", msg.clone()),
+            AppError::SerializationError(e) => {
+                (StatusCode::UNPROCESSABLE_ENTITY, "SERIALIZATION_ERROR", e.to_string())
+            }
         };
 
         let body = Json(json!({
