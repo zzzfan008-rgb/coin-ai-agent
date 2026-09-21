@@ -36,6 +36,7 @@ pub use embedding::EmbeddingService;
 pub use indexer::DocumentIndexer;
 pub use parser::DocumentParser;
 pub use qdrant::QdrantStore;
+pub use qdrant::RawPoint;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};

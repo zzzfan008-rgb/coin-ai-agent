@@ -12,8 +12,16 @@
 use anyhow::{bail, Context, Result};
 use reqwest::Client;
 use serde::Deserialize;
+use serde_json::Value;
 
 use super::{QdrantChunk, QdrantSearchResult};
+
+/// A point with a free-form payload (used by the CLIP image indexer).
+pub struct RawPoint {
+    pub id: String,
+    pub vector: Vec<f32>,
+    pub payload: Value,
+}
 
 /// Thin REST client for a single Qdrant collection.
 #[derive(Clone)]
@@ -113,6 +121,50 @@ impl QdrantStore {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
             bail!("Qdrant upsert failed ({}): {text}", status);
+        }
+
+        Ok(())
+    }
+
+    // ── Generic raw-point upsert ─────────────────────────────────────────────
+
+    /// Upsert points with arbitrary JSON payloads (used by the image indexer).
+    pub async fn upsert_raw_points(&self, points: Vec<RawPoint>) -> Result<()> {
+        if points.is_empty() {
+            return Ok(());
+        }
+
+        let url = format!(
+            "{}/collections/{}/points?wait=true",
+            self.base_url, self.collection
+        );
+
+        let points: Vec<_> = points
+            .into_iter()
+            .map(|p| {
+                serde_json::json!({
+                    "id": p.id,
+                    "vector": p.vector,
+                    "payload": p.payload,
+                })
+            })
+            .collect();
+
+        let body = serde_json::json!({ "points": points });
+
+        let resp = self
+            .http
+            .put(&url)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .context("Qdrant raw upsert request failed")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            bail!("Qdrant raw upsert failed ({}): {text}", status);
         }
 
         Ok(())

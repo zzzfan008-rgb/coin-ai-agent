@@ -600,6 +600,101 @@ export const handlers = [
     )
     return HttpResponse.json({ projects: list })
   }),
+
+  // ── 以图搜图（T-019 CLIP） ────────────────────────────────────────────────
+  http.post('*/internal/images/similar', async ({ request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+
+    let orgId = ''
+    let deptId = ''
+    try {
+      const form = await request.formData()
+      orgId = String(form.get('org_id') ?? '')
+      deptId = String(form.get('dept_id') ?? '')
+    } catch {
+      return errorResponse(400, 'bad_request', '无法解析上传的图片')
+    }
+
+    if (orgId !== user.org_id || deptId !== user.dept_id) {
+      return errorResponse(403, 'forbidden', '不能检索其他部门的图片')
+    }
+
+    await sleep(500)
+
+    const mockStyles = [
+      { name: 'A字连衣裙', seed: 'dress1' },
+      { name: '落肩西装外套', seed: 'blazer2' },
+      { name: '高腰阔腿裤', seed: 'pants3' },
+      { name: '雪纺衬衫', seed: 'shirt4' },
+      { name: '百褶半裙', seed: 'skirt5' },
+      { name: '针织开衫', seed: 'knit6' },
+      { name: '风衣外套', seed: 'coat7' },
+      { name: '直筒牛仔裤', seed: 'jeans8' },
+    ]
+
+    const results = mockStyles.map((s, i) => ({
+      image_path: `https://picsum.photos/seed/${s.seed}/480/640`,
+      style_id: `mock-style-${s.seed}`,
+      style_name: s.name,
+      similarity: Number((0.94 - i * 0.035).toFixed(4)),
+    }))
+
+    return HttpResponse.json({ results })
+  }),
+
+  // ── 款式图片上传 ───────────────────────────────────────────────────────────
+  http.post('*/api/styles/:id/images', async ({ params, request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+
+    let fileName = 'uploaded'
+    try {
+      const form = await request.formData()
+      const file = form.get('file')
+      if (file instanceof File) fileName = file.name
+    } catch {
+      return errorResponse(400, 'bad_request', '无法解析上传的文件')
+    }
+
+    const ext = fileName.split('.').pop()?.toLowerCase() ?? 'jpg'
+    if (!['jpg', 'jpeg', 'png', 'webp'].includes(ext)) {
+      return errorResponse(400, 'bad_request', '仅支持 jpg/png/webp 图片')
+    }
+
+    return HttpResponse.json(
+      {
+        id: newId(),
+        org_id: user.org_id,
+        dept_id: user.dept_id,
+        style_id: String(params.id),
+        image_path: `uploads/style-images/${user.org_id}/${newId()}.${ext}`,
+        file_type: ext,
+        uploaded_by: user.id,
+        created_at: new Date().toISOString(),
+      },
+      { status: 201 },
+    )
+  }),
+
+  // ── 款式图片列表 ───────────────────────────────────────────────────────────
+  http.get('*/api/styles/:id/images', ({ params, request }) => {
+    const user = authenticate(request)
+    if (!user) return errorResponse(401, 'unauthorized', '未认证或 Token 无效')
+
+    const images = [1, 2].map((i) => ({
+      id: newId(),
+      org_id: user.org_id,
+      dept_id: user.dept_id,
+      style_id: String(params.id),
+      image_path: `https://picsum.photos/seed/style${i}${String(params.id).slice(0, 4)}/480/640`,
+      file_type: 'jpg',
+      uploaded_by: user.id,
+      created_at: new Date().toISOString(),
+    }))
+
+    return HttpResponse.json({ images, total: images.length })
+  }),
 ]
 
 // ── 项目工具函数 ─────────────────────────────────────────────────────────────

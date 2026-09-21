@@ -62,4 +62,13 @@ pub fn routes() -> Router<AppState> {
             "/api/mcp/servers/:id/tools",
             get(handlers::mcp_server_tools),
         )
+        // CLIP image search (T-019)
+        .route(
+            "/internal/images/similar",
+            post(handlers::find_similar_images),
+        )
+        .route(
+            "/api/styles/:id/images",
+            post(handlers::upload_style_image).get(handlers::list_style_images),
+        )
 }

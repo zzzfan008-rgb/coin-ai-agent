@@ -21,9 +21,11 @@ mod skill;
 mod skill_engine;
 mod mcp;
 mod rag;
+mod images;
 mod session;
 mod middleware;
 mod rbac;
+mod intent;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -39,6 +41,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 use crate::config::AppConfig;
 use crate::llm::LlmClient;
 use crate::rag::{RagConfig, RagRetriever};
+use crate::images::ImageSearchService;
 use crate::rbac::RbacService;
 use crate::session::SessionStore;
 
@@ -50,6 +53,8 @@ pub struct AppServices {
     pub llm_client: Arc<LlmClient>,
     pub rbac: Arc<RbacService>,
     pub rag_retriever: Arc<RagRetriever>,
+    pub intent_router: Arc<crate::intent::IntentRouter>,
+    pub image_search: Arc<ImageSearchService>,
 }
 
 #[tokio::main]
@@ -170,12 +175,29 @@ async fn main() -> Result<()> {
         }
     }
 
+    // ── CLIP image search (T-019) ───────────────────────────────────────────
+    let image_search = Arc::new(ImageSearchService::from_env());
+    if image_search.configured() {
+        tracing::info!("CLIP client ready (model={})", image_search.model_name());
+    } else {
+        tracing::warn!("CLIP_API_ENDPOINT not set — image upload/search will fail until configured");
+    }
+    if let Err(e) = image_search.ensure_collection().await {
+        tracing::warn!("Qdrant style_images collection init failed: {e}");
+    }
+
+    // ── Intent router (T-014) ──────────────────────────────────────────────
+    let rules_path = project_root.join("api-core/src/intent/rules.yaml");
+    let intent_router = Arc::new(crate::intent::IntentRouter::load_or_embedded(&rules_path)?);
+
     let services = Arc::new(AppServices {
         config,
         session_store,
         llm_client,
         rbac,
         rag_retriever,
+        intent_router,
+        image_search,
     });
 
     // ── Router ──────────────────────────────────────────────────────────────

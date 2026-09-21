@@ -280,6 +280,75 @@ export async function listProjectsForSession(
   return apiFetch(`/api/sessions/${sessionId}/projects`)
 }
 
+// ── CLIP 以图搜图 (T-019) ───────────────────────────────────────────────────
+
+export interface StyleImage {
+  id: string
+  org_id: string
+  dept_id: string
+  style_id: string | null
+  image_path: string
+  file_type: string | null
+  uploaded_by: string | null
+  created_at: string
+}
+
+export interface SimilarImage {
+  image_path: string
+  style_id: string | null
+  style_name: string | null
+  similarity: number
+}
+
+/** 以图搜图：multipart 上传一张图片，返回 Top-K 相似款式图 */
+export async function searchSimilarImages(
+  file: File,
+  orgId: string,
+  deptId: string,
+  topK = 8,
+): Promise<SimilarImage[]> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('org_id', orgId)
+  form.append('dept_id', deptId)
+  form.append('top_k', String(topK))
+
+  const res = await fetch('/internal/images/similar', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: form,
+  })
+  if (!res.ok) throw await readError(res)
+  const body = (await res.json()) as { results: SimilarImage[] }
+  return body.results
+}
+
+/** 上传款式图片 */
+export async function uploadStyleImage(
+  styleId: string,
+  file: File,
+  uploadedBy?: string,
+): Promise<StyleImage> {
+  const form = new FormData()
+  form.append('file', file)
+  if (uploadedBy) form.append('uploaded_by', uploadedBy)
+
+  const res = await fetch(`/api/styles/${styleId}/images`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: form,
+  })
+  if (!res.ok) throw await readError(res)
+  return (await res.json()) as StyleImage
+}
+
+/** 款式图片列表 */
+export async function listStyleImages(
+  styleId: string,
+): Promise<{ images: StyleImage[]; total: number }> {
+  return apiFetch(`/api/styles/${styleId}/images`)
+}
+
 // ── 流式对话（SSE） ─────────────────────────────────────────────────────────
 
 export interface StreamChatParams {

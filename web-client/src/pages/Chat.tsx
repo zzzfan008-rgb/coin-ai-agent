@@ -12,6 +12,12 @@ import { SkillPanel } from '../components/SkillPanel'
 import { MessageBubble } from '../components/MessageBubble'
 import { ChatInput } from '../components/ChatInput'
 import { AddToProjectsModal } from '../components/AddToProjectsModal'
+import { SimilarImagesPanel } from '../components/SimilarImagesPanel'
+import {
+  searchSimilarImages,
+  getStoredUser,
+  type SimilarImage,
+} from '../api/client'
 import { SKILL_CATALOG } from '../api/client'
 
 export default function Chat() {
@@ -23,6 +29,14 @@ export default function Chat() {
   const chat = useChat(params.id)
   const [skillPanelOpen, setSkillPanelOpen] = useState(false)
   const [addToProjectOpen, setAddToProjectOpen] = useState(false)
+
+  // 以图搜图面板状态
+  const [similarPanel, setSimilarPanel] = useState<{
+    queryUrl: string
+    results: SimilarImage[]
+    loading: boolean
+    error: string | null
+  } | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -58,6 +72,49 @@ export default function Chat() {
   }, [lastContent, chat.messages.length])
 
   const error = chat.error
+
+  const handleSend = (text: string, images: File[]) => {
+    if (images.length > 0) {
+      // 以图搜图（以第一张图为查询；附带文字也作为普通消息发送）
+      const file = images[0]
+      const queryUrl = URL.createObjectURL(file)
+      const user = getStoredUser()
+
+      setSimilarPanel({ queryUrl, results: [], loading: true, error: null })
+
+      if (!user) {
+        setSimilarPanel({
+          queryUrl,
+          results: [],
+          loading: false,
+          error: '未登录，无法检索',
+        })
+        return
+      }
+
+      void (async () => {
+        try {
+          const results = await searchSimilarImages(
+            file,
+            user.org_id,
+            user.dept_id,
+          )
+          setSimilarPanel({ queryUrl, results, loading: false, error: null })
+        } catch (e) {
+          setSimilarPanel({
+            queryUrl,
+            results: [],
+            loading: false,
+            error: e instanceof Error ? e.message : '以图搜图失败',
+          })
+        }
+      })()
+
+      if (text) void chat.sendMessage(text)
+    } else {
+      void chat.sendMessage(text)
+    }
+  }
 
   return (
     <>
@@ -110,6 +167,20 @@ export default function Chat() {
         </div>
       )}
 
+      {/* 以图搜图结果面板 */}
+      {similarPanel && (
+        <SimilarImagesPanel
+          queryUrl={similarPanel.queryUrl}
+          results={similarPanel.results}
+          loading={similarPanel.loading}
+          error={similarPanel.error}
+          onClose={() => {
+            URL.revokeObjectURL(similarPanel.queryUrl)
+            setSimilarPanel(null)
+          }}
+        />
+      )}
+
       {/* 消息区 */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-5">
         <div className="mx-auto max-w-3xl space-y-5">
@@ -137,7 +208,7 @@ export default function Chat() {
       </div>
 
       <ChatInput
-        onSend={(t) => void chat.sendMessage(t)}
+        onSend={handleSend}
         onStop={chat.stopStreaming}
         isStreaming={chat.isStreaming}
         disabled={!chat.loaded || !chat.currentSession}

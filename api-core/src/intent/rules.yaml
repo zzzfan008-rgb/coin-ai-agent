@@ -1,0 +1,23 @@
+# Intent routing rules — keyword → skill mapping (T-014).
+#
+# 规则关键词匹配：命中数最多的意图胜出；意图模糊（次优候选得分
+# 达到 top 的 50% 以上）时 IntentResult.candidates 会带上多个可能 skill。
+# 未命中任何规则时回落到 general（不强制 skill，走通用对话）。
+#
+# 修改本文件后无需重启：IntentRouter 每次 classify 前检查 mtime 自动热加载。
+
+- intent: fabric
+  skill: fabric-query
+  keywords: [面料, 布料, 棉, 麻, 丝, 毛, 涤纶, 锦纶, 透气, 克重, 成分, 保暖, 织物, fabric, material, textile]
+
+- intent: color
+  skill: color-matching
+  keywords: [颜色, 配色, 色彩, 色, 撞色, 搭配什么颜色, hex, rgb, 流行色, 色卡, 色调, color, colour]
+
+- intent: style
+  skill: style-inspiration
+  keywords: [款式, 版型, 廓形, 灵感, 设计, A字, H型, 连衣裙, 衬衫, 外套, 剪裁, 风格, 穿搭, style, silhouette, design]
+
+- intent: general
+  skill: null
+  keywords: []

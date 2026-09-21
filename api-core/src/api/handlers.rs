@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use sqlx::Row;
 use axum::{
-    extract::{Multipart, Path, Query, State},
+    extract::{Multipart, Path, Query, State, Request},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -152,6 +152,17 @@ pub async fn chat_completions(
         return stream_chat(state, req).await;
     }
 
+    // Take ownership of request fields (extra_body is consumed below).
+    let CoreChatRequest {
+        model: req_model,
+        mut messages,
+        stream: _,
+        temperature: _,
+        max_tokens: _,
+        extra_body,
+        user_context,
+    } = req;
+
     let engine = AgentEngine::new(
         AgentConfig::default(),
         state.llm_client.clone(),
@@ -159,49 +170,97 @@ pub async fn chat_completions(
         Some(state.rag_retriever.clone()),
     );
 
-    let model = req
-        .extra_body
+    let model = extra_body
         .as_ref()
         .and_then(|b| b.model.clone())
         .or_else(|| {
-            if req.model.is_empty() || req.model == "__default__" {
+            if req_model.is_empty() || req_model == "__default__" {
                 None
             } else {
-                Some(req.model.clone())
+                Some(req_model)
             }
         });
 
-    let collections = req
-        .extra_body
+    let collections = extra_body
         .as_ref()
         .and_then(|b| b.knowledge_collections.clone());
 
     // Optional session for persisting the assistant reply + token usage.
-    let session_id = req
-        .extra_body
+    let session_id = extra_body
         .as_ref()
         .and_then(|b| b.session_id.clone());
 
-    // Build LLM tool definitions from the requested skill ids.
-    // extra_body.skill_ids: ["fabric-query", ...] → qualified tool names
-    // skill_<skill>_<tool>; absent/empty → no tools exposed.
-    let skill_tools: Option<Vec<ToolDefinition>> = req
-        .extra_body
+    // ── Intent routing (T-014) ─────────────────────────────────────────────
+    // 用户未手动指定 skill_ids 时，对最后一条 user 消息做规则分类，
+    // 自动路由到对应 skill（general 不强制 skill，走通用对话）。
+    let manual_skill_ids = extra_body
         .as_ref()
         .and_then(|b| b.skill_ids.clone())
-        .filter(|ids| !ids.is_empty())
-        .and_then(|ids| {
-            let guard = crate::skill_engine::SKILL_ENGINE.read().ok()?;
-            let engine = guard.as_ref()?;
-            Some(engine.registry.to_llm_tools_for_skills(&ids))
-        });
+        .filter(|ids| !ids.is_empty());
+
+    let last_user: String = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .and_then(|m| m.content.clone())
+        .unwrap_or_default();
+
+    let intent = state.intent_router.classify(&last_user);
+
+    let (skill_ids, route_source): (Vec<String>, &str) = match manual_skill_ids {
+        Some(ids) => (ids, "manual"),
+        None => match &intent.skill_id {
+            Some(sid) => (vec![sid.clone()], "intent"),
+            None => (vec![], "general"),
+        },
+    };
+
+    // 路由命中 skill 时，把该 skill 的 prompt 作为 system 消息注入上下文。
+    if route_source == "intent" {
+        if let Some(system_prompt) = skill_system_prompt(&skill_ids) {
+            messages.insert(0, ChatMessage::system(&system_prompt));
+        }
+    }
+
+    tracing::info!(
+        input = %last_user.chars().take(80).collect::<String>(),
+        intent = %intent.intent,
+        skill = ?intent.skill_id,
+        confidence = intent.confidence,
+        matched = ?intent.matched_keywords,
+        candidates = intent.candidates.len(),
+        route = route_source,
+        "Intent classification decision"
+    );
+
+    // Build LLM tool definitions from the effective skill ids.
+    // qualified tool names: skill_<skill>_<tool>; empty → no tools exposed.
+    let skill_tools: Option<Vec<ToolDefinition>> = if skill_ids.is_empty() {
+        None
+    } else {
+        let guard = match crate::skill_engine::SKILL_ENGINE.read() {
+            Ok(g) => g,
+            Err(_) => {
+                return crate::error::AppError::Internal("SKILL_ENGINE poisoned".into())
+                    .into_response()
+            }
+        };
+        let engine = match guard.as_ref() {
+            Some(e) => e,
+            None => {
+                return crate::error::AppError::Internal("SKILL_ENGINE not initialised".into())
+                    .into_response()
+            }
+        };
+        Some(engine.registry.to_llm_tools_for_skills(&skill_ids))
+    };
 
     let (reply, usage) = match engine
         .run_turn(
-            &req.messages,
+            &messages,
             model.as_deref(),
             skill_tools.as_deref(),
-            &req.user_context,
+            &user_context,
             collections.as_deref(),
         )
         .await
@@ -281,9 +340,45 @@ async fn stream_chat(state: Arc<AppServices>, req: CoreChatRequest) -> Response 
     let (tx, rx) = tokio::sync::broadcast::channel::<Bytes>(128);
 
     let llm = state.llm_client.clone();
-    let messages = req.messages;
+    let mut messages = req.messages;
     let temperature = req.temperature;
     let max_tokens = req.max_tokens;
+
+    // ── Intent routing (T-014) ─────────────────────────────────────────────
+    // 流式路径同样先分类（工具调用在流式路径暂未支持，这里只做 prompt 注入）。
+    let manual_skill_ids = req
+        .extra_body
+        .as_ref()
+        .and_then(|b| b.skill_ids.clone())
+        .filter(|ids| !ids.is_empty());
+
+    let last_user: String = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .and_then(|m| m.content.clone())
+        .unwrap_or_default();
+
+    let intent = state.intent_router.classify(&last_user);
+
+    let routed_skill = match manual_skill_ids {
+        None => intent.skill_id.clone().map(|sid| vec![sid]),
+        _ => None,
+    };
+    if let Some(ids) = &routed_skill {
+        if let Some(system_prompt) = skill_system_prompt(ids) {
+            messages.insert(0, ChatMessage::system(&system_prompt));
+        }
+    }
+
+    tracing::info!(
+        input = %last_user.chars().take(80).collect::<String>(),
+        intent = %intent.intent,
+        skill = ?intent.skill_id,
+        confidence = intent.confidence,
+        stream = true,
+        "Intent classification decision"
+    );
 
     // Resolve model: extra_body.model overrides the top-level model field.
     let model = req
@@ -496,6 +591,35 @@ pub async fn execute_skill(
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+/// Build a skill-context system prompt from the routed skills' metadata.
+/// Returns None if any skill can't be resolved (read guard dropped before return).
+fn skill_system_prompt(skill_ids: &[String]) -> Option<String> {
+    let guard = crate::skill_engine::SKILL_ENGINE.read().ok()?;
+    let engine = guard.as_ref()?;
+    let mut sections = Vec::new();
+    for sid in skill_ids {
+        if let Some(meta) = engine.get_skill(sid) {
+            let detail = meta
+                .long_description
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| meta.description.clone());
+            sections.push(format!(
+                "- Skill `{}` ({}):\n{}",
+                meta.id, meta.name, detail
+            ));
+        }
+    }
+    if sections.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "The user's intent has been routed to the following skill(s). \
+         Follow the skill guidance below and prefer invoking its tools when they can help:\n\n{}",
+        sections.join("\n\n")
+    ))
+}
 
 fn parse_uuid(field: &str, raw: &str) -> Result<Uuid, crate::error::AppError> {
     Uuid::parse_str(raw)
@@ -777,4 +901,292 @@ pub async fn mcp_servers(
         .map(|(id, healthy)| serde_json::json!({ "id": id, "healthy": healthy }))
         .collect();
     Json(serde_json::json!({ "servers": servers }))
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CLIP 以图搜图 — image upload, list, and similarity search (T-019)
+// ══════════════════════════════════════════════════════════════════════════════
+
+use axum::extract::FromRequest;
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct StyleImageRecord {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub dept_id: Uuid,
+    pub style_id: Option<Uuid>,
+    pub image_path: String,
+    pub file_type: Option<String>,
+    pub uploaded_by: Option<Uuid>,
+    pub created_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SimilarImagesJsonRequest {
+    /// Raw base64, optionally as a `data:image/...;base64,` URL.
+    pub image_base64: String,
+    pub org_id: String,
+    pub dept_id: String,
+    #[serde(default = "default_knowledge_top_k")]
+    pub top_k: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SimilarImageHit {
+    pub image_path: String,
+    pub style_id: Option<String>,
+    pub style_name: Option<String>,
+    pub similarity: f32,
+}
+
+// ── POST /internal/images/similar ────────────────────────────────────────────
+
+/// Accepts either a multipart upload (`file` + org_id/dept_id/top_k) or a JSON
+/// body with base64 image data. CLIP-encodes the image, searches Qdrant
+/// filtered by org+dept, and enriches hits with the style name.
+pub async fn find_similar_images(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, crate::error::AppError> {
+    let content_type = request
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase();
+
+    let (image_bytes, org_id_raw, dept_id_raw, top_k) =
+        if content_type.starts_with("multipart/form-data") {
+            let mut multipart = Multipart::from_request(request, &state)
+                .await
+                .map_err(|e| crate::error::AppError::BadRequest(format!("Invalid multipart: {e}")))?;
+
+            let mut file_bytes: Vec<u8> = Vec::new();
+            let mut org = String::new();
+            let mut dept = String::new();
+            let mut k = 5usize;
+
+            while let Some(field) = multipart.next_field().await.map_err(|e| {
+                crate::error::AppError::BadRequest(format!("Multipart field: {e}"))
+            })? {
+                match field.name().unwrap_or("") {
+                    "file" => {
+                        file_bytes = field
+                            .bytes()
+                            .await
+                            .map_err(|e| {
+                                crate::error::AppError::BadRequest(format!("Read file: {e}"))
+                            })?
+                            .to_vec();
+                    }
+                    "org_id" => org = field.text().await.unwrap_or_default(),
+                    "dept_id" => dept = field.text().await.unwrap_or_default(),
+                    "top_k" => {
+                        k = field
+                            .text()
+                            .await
+                            .ok()
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(5);
+                    }
+                    _ => {}
+                }
+            }
+            (file_bytes, org, dept, k)
+        } else {
+            // JSON body — buffer then parse.
+            let (parts, body) = request.into_parts();
+            let bytes = axum::body::to_bytes(body, 10 * 1024 * 1024)
+                .await
+                .map_err(|e| crate::error::AppError::BadRequest(format!("Read body: {e}")))?;
+            let _ = parts;
+            let req: SimilarImagesJsonRequest = serde_json::from_slice(&bytes)?;
+            let decoded = crate::images::clip::base64_decode(&req.image_base64).map_err(|e| {
+                crate::error::AppError::BadRequest(format!("Invalid image_base64: {e}"))
+            })?;
+            (decoded, req.org_id, req.dept_id, req.top_k)
+        };
+
+    if image_bytes.is_empty() {
+        return Err(crate::error::AppError::BadRequest("Image is empty".into()));
+    }
+    parse_uuid("org_id", &org_id_raw)?;
+    parse_uuid("dept_id", &dept_id_raw)?;
+    let top_k = top_k.clamp(1, 50);
+
+    let hits = state
+        .image_search
+        .search_similar(&image_bytes, &org_id_raw, &dept_id_raw, top_k)
+        .await
+        .map_err(|e| crate::error::AppError::LlmError(e.to_string()))?;
+
+    // Enrich with style names in one query.
+    let style_ids: Vec<Uuid> = hits
+        .iter()
+        .filter_map(|h| h.style_id.as_deref().and_then(|s| Uuid::parse_str(s).ok()))
+        .collect();
+    let mut name_map = std::collections::HashMap::new();
+    if !style_ids.is_empty() {
+        let rows: Vec<(Uuid, String)> = sqlx::query_as(
+            "SELECT id, name FROM styles WHERE id = ANY($1)",
+        )
+        .bind(&style_ids)
+        .fetch_all(state.session_store.pool())
+        .await?;
+        name_map.extend(rows);
+    }
+
+    let results: Vec<SimilarImageHit> = hits
+        .into_iter()
+        .map(|h| {
+            let style_name = h
+                .style_id
+                .as_deref()
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .and_then(|u| name_map.get(&u).cloned());
+            SimilarImageHit {
+                image_path: h.image_path,
+                style_id: h.style_id,
+                style_name,
+                similarity: h.score,
+            }
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "results": results })))
+}
+
+// ── POST /api/styles/:id/images ──────────────────────────────────────────────
+
+/// Upload an image for a style; stores the file, inserts the DB row, and
+/// spawns CLIP encoding + Qdrant upsert.
+pub async fn upload_style_image(
+    State(state): State<AppState>,
+    Path(style_id): Path<Uuid>,
+    mut multipart: Multipart,
+) -> Result<Json<Value>, crate::error::AppError> {
+    // org/dept come from the style row itself.
+    let style_row: (Uuid, Uuid) = sqlx::query_as(
+        "SELECT org_id, dept_id FROM styles WHERE id = $1",
+    )
+    .bind(style_id)
+    .fetch_optional(state.session_store.pool())
+    .await?
+    .ok_or_else(|| crate::error::AppError::NotFound("Style not found".into()))?;
+    let (org_id, dept_id) = style_row;
+
+    let mut file_bytes: Vec<u8> = Vec::new();
+    let mut original_filename = String::new();
+    let mut uploaded_by: Option<Uuid> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| crate::error::AppError::BadRequest(format!("Invalid multipart: {e}")))?
+    {
+        match field.name().unwrap_or("") {
+            "file" => {
+                original_filename = field.file_name().unwrap_or("uploaded").to_string();
+                file_bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|e| crate::error::AppError::BadRequest(format!("Read file: {e}")))?
+                    .to_vec();
+            }
+            "uploaded_by" => {
+                let raw = field.text().await.unwrap_or_default();
+                uploaded_by = Uuid::parse_str(&raw).ok();
+            }
+            _ => {}
+        }
+    }
+
+    if file_bytes.is_empty() {
+        return Err(crate::error::AppError::BadRequest("File is empty".into()));
+    }
+
+    let file_type = std::path::Path::new(&original_filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .filter(|e| matches!(e.as_str(), "jpg" | "jpeg" | "png" | "webp"))
+        .ok_or_else(|| {
+            crate::error::AppError::BadRequest(
+                "Unsupported image type — allowed: jpg, jpeg, png, webp".into(),
+            )
+        })?;
+
+    let image_id = Uuid::new_v4();
+    let image_path = crate::images::indexer::ImageIndexer::store_image(
+        &org_id.to_string(),
+        image_id,
+        &file_type,
+        &file_bytes,
+    )
+    .await
+    .map_err(|e| crate::error::AppError::Internal(format!("Store image: {e}")))?;
+
+    let record: StyleImageRecord = sqlx::query_as(
+        r#"INSERT INTO style_images
+               (id, org_id, dept_id, style_id, image_path, file_type, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING id, org_id, dept_id, style_id, image_path, file_type,
+                     uploaded_by, created_at"#,
+    )
+    .bind(image_id)
+    .bind(org_id)
+    .bind(dept_id)
+    .bind(style_id)
+    .bind(&image_path)
+    .bind(&file_type)
+    .bind(uploaded_by)
+    .fetch_one(state.session_store.pool())
+    .await?;
+
+    // Background CLIP encode + Qdrant upsert (best-effort).
+    let image_search = state.image_search.clone();
+    let bytes_clone = file_bytes.clone();
+    let org_str = org_id.to_string();
+    let dept_str = dept_id.to_string();
+    let path_clone = image_path.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::images::indexer::ImageIndexer::index_image(
+            &image_search.clip(),
+            image_search.store(),
+            image_id,
+            &path_clone,
+            Some(style_id),
+            &org_str,
+            &dept_str,
+            &bytes_clone,
+        )
+        .await
+        {
+            tracing::error!(%image_id, "Image indexing failed: {e}");
+        }
+    });
+
+    Ok(Json(serde_json::to_value(&record)?))
+}
+
+// ── GET /api/styles/:id/images ───────────────────────────────────────────────
+
+/// List images attached to a style, newest first.
+pub async fn list_style_images(
+    State(state): State<AppState>,
+    Path(style_id): Path<Uuid>,
+) -> Result<Json<Value>, crate::error::AppError> {
+    let images: Vec<StyleImageRecord> = sqlx::query_as(
+        r#"SELECT id, org_id, dept_id, style_id, image_path, file_type,
+                  uploaded_by, created_at
+           FROM style_images
+           WHERE style_id = $1
+           ORDER BY created_at DESC"#,
+    )
+    .bind(style_id)
+    .fetch_all(state.session_store.pool())
+    .await?;
+
+    Ok(Json(serde_json::json!({ "images": images, "total": images.len() })))
 }
