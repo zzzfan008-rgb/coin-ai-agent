@@ -978,9 +978,24 @@ pub async fn upload_knowledge_document(
 /// deletes every Qdrant point whose payload `doc_id` matches.
 pub async fn delete_knowledge_document(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Path(doc_id): Path<Uuid>,
     Query(q): Query<KnowledgeDocDeleteQuery>,
 ) -> Result<Json<Value>, crate::error::AppError> {
+    let (h_org, h_dept, _) = header_identity(&headers);
+    let org_id = h_org
+        .as_deref()
+        .map(Uuid::parse_str)
+        .and_then(Result::ok)
+        .or(q.org_id)
+        .ok_or_else(|| crate::error::AppError::BadRequest("org_id required".into()))?;
+    let dept_id = h_dept
+        .as_deref()
+        .map(Uuid::parse_str)
+        .and_then(Result::ok)
+        .or(q.dept_id)
+        .ok_or_else(|| crate::error::AppError::BadRequest("dept_id required".into()))?;
+
     let res = sqlx::query(
         r#"UPDATE knowledge_documents
            SET status = 'deleted', deleted_at = NOW()
@@ -988,8 +1003,8 @@ pub async fn delete_knowledge_document(
              AND deleted_at IS NULL"#,
     )
     .bind(doc_id)
-    .bind(q.org_id)
-    .bind(q.dept_id)
+    .bind(org_id)
+    .bind(dept_id)
     .execute(state.session_store.pool())
     .await?;
 
@@ -1016,8 +1031,74 @@ pub async fn delete_knowledge_document(
 
 #[derive(Debug, Deserialize)]
 pub struct KnowledgeDocDeleteQuery {
-    org_id: Uuid,
-    dept_id: Uuid,
+    #[serde(default)]
+    org_id: Option<Uuid>,
+    #[serde(default)]
+    dept_id: Option<Uuid>,
+}
+
+// ── GET /api/knowledge/documents ─────────────────────────────────────────────
+
+/// List knowledge documents scoped to the caller's org + dept.
+/// Field names are mapped to the frontend `KnowledgeDocument` contract
+/// (filename=title, error=error_message, created_at=uploaded_at, ...).
+pub async fn list_knowledge_documents(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<KnowledgeDocDeleteQuery>,
+) -> Result<Json<Value>, crate::error::AppError> {
+    let (h_org, h_dept, _) = header_identity(&headers);
+    let org = h_org
+        .as_deref()
+        .map(Uuid::parse_str)
+        .and_then(Result::ok)
+        .or(q.org_id)
+        .ok_or_else(|| crate::error::AppError::BadRequest("org_id required".into()))?;
+    let dept = h_dept
+        .as_deref()
+        .map(Uuid::parse_str)
+        .and_then(Result::ok)
+        .or(q.dept_id)
+        .ok_or_else(|| crate::error::AppError::BadRequest("dept_id required".into()))?;
+
+    let rows = sqlx::query(
+        r#"SELECT id, org_id, dept_id, title, file_type, status, chunk_count,
+                  uploaded_by, error_message, uploaded_at, processed_at
+           FROM knowledge_documents
+           WHERE org_id = $1 AND dept_id = $2 AND deleted_at IS NULL
+           ORDER BY uploaded_at DESC"#,
+    )
+    .bind(org)
+    .bind(dept)
+    .fetch_all(state.session_store.pool())
+    .await?;
+
+    let documents: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            let uploaded_at: chrono::DateTime<chrono::Utc> = r.get("uploaded_at");
+            let processed_at: Option<chrono::DateTime<chrono::Utc>> =
+                r.try_get("processed_at").ok();
+            serde_json::json!({
+                "id": r.get::<Uuid, _>("id").to_string(),
+                "org_id": r.get::<Uuid, _>("org_id").to_string(),
+                "dept_id": r.get::<Uuid, _>("dept_id").to_string(),
+                "filename": r.get::<String, _>("title"),
+                "file_type": r.get::<String, _>("file_type"),
+                "status": r.get::<String, _>("status"),
+                "chunk_count": r.get::<i32, _>("chunk_count"),
+                "uploaded_by": r.try_get::<Uuid, _>("uploaded_by").ok().map(|u| u.to_string()),
+                "error": r.try_get::<String, _>("error_message").ok(),
+                "created_at": uploaded_at,
+                "updated_at": processed_at,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "documents": documents,
+        "total": documents.len(),
+    })))
 }
 
 // ── POST /internal/intent/classify ──────────────────────────────────────────

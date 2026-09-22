@@ -51,7 +51,8 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/api/knowledge/documents",
-            post(handlers::upload_knowledge_document),
+            post(handlers::upload_knowledge_document)
+                .get(handlers::list_knowledge_documents),
         )
         .route(
             "/api/knowledge/documents/:id",
