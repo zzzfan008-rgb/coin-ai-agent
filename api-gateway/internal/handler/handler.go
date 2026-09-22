@@ -60,6 +60,8 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		orgID, _ := uuid.Parse(resp.OrgID)
 		go h.auditSvc.Log(r.Context(), orgID, userID, "auth.register", "user", &userID, middleware.GetClientIP(r))
 	}
+	// Set httpOnly cookie — XSS cannot read it; SameSite=Lax prevents CSRF on top-level nav
+	h.svc.SetAuthCookie(w, resp.Token)
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -97,7 +99,20 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		orgID, _ := uuid.Parse(resp.OrgID)
 		go h.auditSvc.Log(r.Context(), orgID, userID, "auth.login", "user", &userID, middleware.GetClientIP(r))
 	}
+	// Set httpOnly cookie — XSS cannot read it; SameSite=Lax prevents CSRF on top-level nav
+	h.svc.SetAuthCookie(w, resp.Token)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// Logout godoc
+// @Summary 用户登出
+// @Tags auth
+// @POST json
+// @Success 200 {object} model.MessageResponse
+// @Router /api/auth/logout [post]
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	h.svc.ClearAuthCookie(w)
+	writeJSON(w, http.StatusOK, map[string]string{"message": "logged out"})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

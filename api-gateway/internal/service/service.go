@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,12 +28,41 @@ var (
 )
 
 type AuthService struct {
-	db    *sqlx.DB
-	jwtSvc *auth.JWTService
+	db           *sqlx.DB
+	jwtSvc       *auth.JWTService
+	CookieSecure bool // Secure attribute for Set-Cookie (HTTPS in production)
 }
 
-func NewAuthService(db *sqlx.DB, jwtSvc *auth.JWTService) *AuthService {
-	return &AuthService{db: db, jwtSvc: jwtSvc}
+// NewAuthService creates AuthService with optional cookie Secure attribute.
+func NewAuthService(db *sqlx.DB, jwtSvc *auth.JWTService, cookieSecure bool) *AuthService {
+	return &AuthService{db: db, jwtSvc: jwtSvc, CookieSecure: cookieSecure}
+}
+
+// SetAuthCookie writes the JWT as an httpOnly SameSite=Lax cookie on the response.
+// The Secure attribute is set based on the CookieSecure config flag.
+func (s *AuthService) SetAuthCookie(w http.ResponseWriter, token string) {
+	cookie := &http.Cookie{
+		Name:     "token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   s.CookieSecure,
+	}
+	http.SetCookie(w, cookie)
+}
+
+// ClearAuthCookie instructs the browser to delete the auth cookie.
+func (s *AuthService) ClearAuthCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "token",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   0,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   s.CookieSecure,
+	})
 }
 
 // Register creates org + dept + user in a single transaction.

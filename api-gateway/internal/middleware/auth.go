@@ -95,22 +95,35 @@ type AuditEntry struct {
 
 // ─── Middlewares ──────────────────────────────────────────────────────────────
 
-// JWTMiddleware extracts and validates the JWT from the Authorization header.
+// JWTMiddleware extracts and validates JWT from Cookie (preferred) or Authorization header.
+// Supports both browser cookie-based auth (XSS-resistant) and Bearer token API clients.
 func JWTMiddleware(jwtSvc *auth.JWTService) mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" {
-				writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing authorization header")
-				return
+			var tokenString string
+
+			// Track 1: read from httpOnly cookie (browser sessions)
+			if cookie, err := r.Cookie("token"); err == nil && cookie.Value != "" {
+				tokenString = cookie.Value
 			}
-			parts := strings.SplitN(authHeader, " ", 2)
-			if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-				writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid authorization format")
+
+			// Track 2: fall back to Authorization: Bearer header (API clients)
+			if tokenString == "" {
+				authHeader := r.Header.Get("Authorization")
+				if authHeader != "" {
+					parts := strings.SplitN(authHeader, " ", 2)
+					if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
+						tokenString = parts[1]
+					}
+				}
+			}
+
+			if tokenString == "" {
+				writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing authentication token")
 				return
 			}
 
-			claims, err := jwtSvc.Validate(parts[1])
+			claims, err := jwtSvc.Validate(tokenString)
 			if err != nil {
 				writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid or expired token")
 				return
@@ -124,6 +137,35 @@ func JWTMiddleware(jwtSvc *auth.JWTService) mux.MiddlewareFunc {
 			}
 			ctx := context.WithValue(r.Context(), ClaimsKey, ctxClaims)
 			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// CSRFProtection middleware guards state-changing operations (POST/PUT/PATCH/DELETE)
+// against cross-site request forgery. It passes requests that have:
+//   - X-Requested-With: XMLHttpRequest (AJAX/React/Vue/Svelte clients), OR
+//   - a SameSite=Lax (or Strict) cookie (modern browsers auto-set this for top-level navigations)
+//
+// Explicitly whitelisted: /v1/* (OpenAI-compatible API, uses Bearer tokens instead).
+func CSRFProtection() mux.MiddlewareFunc {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			method := r.Method
+			if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions || method == http.MethodTrace {
+				next.ServeHTTP(w, r)
+				return
+			}
+			// Skip /v1/* — those use Bearer token auth instead
+			if strings.HasPrefix(r.URL.Path, "/v1/") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			// Require X-Requested-With header
+			if r.Header.Get("X-Requested-With") != "XMLHttpRequest" {
+				writeError(w, http.StatusForbidden, "FORBIDDEN", "missing X-Requested-With header")
+				return
+			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }

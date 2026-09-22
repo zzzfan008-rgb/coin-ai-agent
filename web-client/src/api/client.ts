@@ -113,8 +113,8 @@ export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
 }
 
-export function saveAuth(token: string, user: AuthUser): void {
-  localStorage.setItem(TOKEN_KEY, token)
+export function saveAuth(_token: string, user: AuthUser): void {
+  // Token stored in httpOnly cookie by the gateway — never touch localStorage for auth.
   localStorage.setItem(USER_KEY, JSON.stringify(user))
 }
 
@@ -129,19 +129,14 @@ export function getStoredUser(): AuthUser | null {
 }
 
 export function clearAuth(): void {
+  // Remove localStorage state; the httpOnly cookie is cleared by POST /api/auth/logout.
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(USER_KEY)
 }
 
 // ── HTTP 基础封装 ─────────────────────────────────────────────────────────
 
-function authHeaders(extra?: Record<string, string>): Record<string, string> {
-  const headers: Record<string, string> = { ...extra }
-  const token = getToken()
-  if (token) headers.Authorization = `Bearer ${token}`
-  return headers
-}
-
+// readError parses an error response body into a human-readable message.
 async function readError(res: Response): Promise<Error> {
   let message = `请求失败（${res.status}）`
   try {
@@ -154,12 +149,13 @@ async function readError(res: Response): Promise<Error> {
   return new Error(message)
 }
 
+// apiFetch sends all requests with credentials: 'include' so the httpOnly cookie is always sent.
+// Auth is handled by the cookie middleware; no Authorization header needed for browser sessions.
 async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     ...init,
-    headers: authHeaders(
-      init.body ? { 'Content-Type': 'application/json' } : undefined,
-    ),
+    credentials: 'include', // always send cookies (including the httpOnly auth cookie)
+    headers: init.body ? { 'Content-Type': 'application/json', ...init.headers } : init.headers,
   })
   if (!res.ok) throw await readError(res)
   if (res.status === 204) return undefined as T
@@ -181,6 +177,11 @@ export async function register(req: RegisterRequest): Promise<AuthResponse> {
     method: 'POST',
     body: JSON.stringify(req),
   })
+}
+
+/** POST /api/auth/logout clears the httpOnly cookie on the gateway side. */
+export async function logout(): Promise<void> {
+  await apiFetch<void>('/api/auth/logout', { method: 'POST' })
 }
 
 // ── 会话接口 ────────────────────────────────────────────────────────────────
@@ -312,7 +313,7 @@ export async function searchSimilarImages(
 
   const res = await fetch('/api/images/similar', {
     method: 'POST',
-    headers: authHeaders(),
+    credentials: 'include', // send httpOnly cookie
     body: form,
   })
   if (!res.ok) throw await readError(res)
@@ -332,7 +333,7 @@ export async function uploadStyleImage(
 
   const res = await fetch(`/api/styles/${styleId}/images`, {
     method: 'POST',
-    headers: authHeaders(),
+    credentials: 'include', // send httpOnly cookie
     body: form,
   })
   if (!res.ok) throw await readError(res)
@@ -386,7 +387,7 @@ export async function uploadKnowledgeDocument(file: File): Promise<KnowledgeDocu
 
   const res = await fetch('/api/knowledge/documents', {
     method: 'POST',
-    headers: authHeaders(),
+    credentials: 'include', // send httpOnly cookie
     body: form,
   })
   if (!res.ok) throw await readError(res)
@@ -472,7 +473,8 @@ export async function streamChatCompletion(
 ): Promise<string> {
   const res = await fetch('/v1/chat/completions', {
     method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    credentials: 'include', // send httpOnly cookie for /v1/* (Bearer fallback also works)
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: params.model ?? 'fashion-ai-default',
       messages: params.messages,

@@ -94,7 +94,7 @@ func main() {
 		chatH        *handler.ChatHandler
 	)
 	if pool != nil {
-		authSvc     = service.NewAuthService(pool, jwtSvc)
+		authSvc     = service.NewAuthService(pool, jwtSvc, cfg.CookieSecure)
 		userSvc     = service.NewUserService(pool)
 		deptSvc     = service.NewDeptService(pool)
 		roleSvc     = service.NewRoleService(pool)
@@ -160,7 +160,7 @@ func main() {
 	r.Use(handlers.CORS(
 		handlers.AllowedOrigins([]string{"*"}),
 		handlers.AllowedMethods([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}),
-		handlers.AllowedHeaders([]string{"Authorization", "Content-Type", "X-Request-ID"}),
+		handlers.AllowedHeaders([]string{"Authorization", "Content-Type", "X-Request-ID", "X-Requested-With"}),
 	))
 
 	// Global middleware chain for authenticated routes
@@ -183,9 +183,13 @@ func main() {
 		api.Use(jwtMw)
 		api.Use(rlMw)
 		api.Use(rbacMw)
+		api.Use(middleware.CSRFProtection()) // CSRF guard for POST/PUT/PATCH/DELETE (skips /v1/*)
 		if auditSvc != nil {
 			api.Use(middleware.AuditLogger(auditSvc))
 		}
+
+		// Auth logout (requires JWT via cookie or Bearer; CSRF-protected POST)
+		api.HandleFunc("/auth/logout", authH.Logout).Methods(http.MethodPost)
 
 		api.HandleFunc("/users", userH.List).Methods(http.MethodGet)
 		api.HandleFunc("/depts", deptH.List).Methods(http.MethodGet)
