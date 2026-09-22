@@ -215,8 +215,9 @@ pub async fn chat_completions(
         },
     };
 
-    // 路由命中 skill 时，把该 skill 的 prompt 作为 system 消息注入上下文。
-    if route_source == "intent" {
+    // 路由命中 skill 时（无论手动指定还是意图自动分类），把该 skill 的
+    // 描述作为 system 消息注入上下文，引导模型调用其工具并按专业角色回答。
+    if route_source == "intent" || route_source == "manual" {
         if let Some(system_prompt) = skill_system_prompt(&skill_ids) {
             messages.insert(0, ChatMessage::system(&system_prompt));
         }
@@ -334,20 +335,41 @@ pub async fn chat_stream(
     stream_chat(state, req).await
 }
 
-/// Build the SSE response. LLM chunks are pushed through a broadcast channel
-/// so the HTTP connection consumes already-framed `data: ...\n\n` bytes.
+/// Build the SSE response. The turn runs through the same agent loop as the
+/// non-streaming path (skill prompt injection + tool definitions + tool-call
+/// execution), so manual/intent skill selection behaves identically. The final
+/// reply is emitted as a single SSE chunk (functional parity over word-by-word
+/// streaming).
 async fn stream_chat(state: Arc<AppServices>, req: CoreChatRequest) -> Response {
     let (tx, rx) = tokio::sync::broadcast::channel::<Bytes>(128);
 
-    let llm = state.llm_client.clone();
-    let mut messages = req.messages;
-    let temperature = req.temperature;
-    let max_tokens = req.max_tokens;
+    let CoreChatRequest {
+        model: req_model,
+        mut messages,
+        extra_body,
+        user_context,
+        ..
+    } = req;
 
-    // ── Intent routing (T-014) ─────────────────────────────────────────────
-    // 流式路径同样先分类（工具调用在流式路径暂未支持，这里只做 prompt 注入）。
-    let manual_skill_ids = req
-        .extra_body
+    // Resolve model: extra_body.model overrides the top-level model field.
+    let model = extra_body
+        .as_ref()
+        .and_then(|b| b.model.clone())
+        .or_else(|| {
+            if req_model.is_empty() || req_model == "__default__" {
+                None
+            } else {
+                Some(req_model)
+            }
+        });
+
+    let collections = extra_body
+        .as_ref()
+        .and_then(|b| b.knowledge_collections.clone());
+    let session_id = extra_body.as_ref().and_then(|b| b.session_id.clone());
+
+    // ── Skill routing (manual first, intent fallback) ───────────────────────
+    let manual_skill_ids = extra_body
         .as_ref()
         .and_then(|b| b.skill_ids.clone())
         .filter(|ids| !ids.is_empty());
@@ -361,12 +383,16 @@ async fn stream_chat(state: Arc<AppServices>, req: CoreChatRequest) -> Response 
 
     let intent = state.intent_router.classify(&last_user);
 
-    let routed_skill = match manual_skill_ids {
-        None => intent.skill_id.clone().map(|sid| vec![sid]),
-        _ => None,
+    let (skill_ids, route_source): (Vec<String>, &str) = match manual_skill_ids {
+        Some(ids) => (ids, "manual"),
+        None => match &intent.skill_id {
+            Some(sid) => (vec![sid.clone()], "intent"),
+            None => (vec![], "general"),
+        },
     };
-    if let Some(ids) = &routed_skill {
-        if let Some(system_prompt) = skill_system_prompt(ids) {
+
+    if route_source == "intent" || route_source == "manual" {
+        if let Some(system_prompt) = skill_system_prompt(&skill_ids) {
             messages.insert(0, ChatMessage::system(&system_prompt));
         }
     }
@@ -376,52 +402,82 @@ async fn stream_chat(state: Arc<AppServices>, req: CoreChatRequest) -> Response 
         intent = %intent.intent,
         skill = ?intent.skill_id,
         confidence = intent.confidence,
+        route = route_source,
         stream = true,
         "Intent classification decision"
     );
 
-    // Resolve model: extra_body.model overrides the top-level model field.
-    let model = req
-        .extra_body
-        .as_ref()
-        .and_then(|b| b.model.clone())
-        .or_else(|| {
-            if req.model.is_empty() || req.model == "__default__" {
-                None
-            } else {
-                Some(req.model)
-            }
-        });
+    // Build LLM tool definitions from the effective skill ids.
+    let skill_tools: Option<Vec<ToolDefinition>> = if skill_ids.is_empty() {
+        None
+    } else {
+        let guard = crate::skill_engine::SKILL_ENGINE.read();
+        match guard {
+            Ok(g) => match g.as_ref() {
+                Some(engine) => Some(engine.registry.to_llm_tools_for_skills(&skill_ids)),
+                None => None,
+            },
+            Err(_) => None,
+        }
+    };
+
+    let session_store = state.session_store.clone();
+    let engine = AgentEngine::new(
+        AgentConfig::default(),
+        state.llm_client.clone(),
+        state.session_store.clone(),
+        Some(state.rag_retriever.clone()),
+    );
 
     tokio::spawn(async move {
-        let stream = match llm
-            .chat_streaming(&messages, model.as_deref(), temperature, max_tokens, None)
+        let (reply, usage) = match engine
+            .run_turn(
+                &messages,
+                model.as_deref(),
+                skill_tools.as_deref(),
+                &user_context,
+                collections.as_deref(),
+            )
             .await
         {
-            Ok(s) => s,
+            Ok(v) => v,
             Err(e) => {
-                let payload = serde_json::json!({"error": {"code": "LLM_ERROR", "message": e.to_string()}});
+                let payload =
+                    serde_json::json!({"error": {"code": "LLM_ERROR", "message": e.to_string()}});
                 let _ = tx.send(Bytes::from(format!("data: {payload}\n\n")));
                 return;
             }
         };
 
-        futures::pin_mut!(stream);
-        while let Some(item) = stream.next().await {
-            match item {
-                Ok(chunk) => {
-                    let data = serde_json::to_string(&chunk).unwrap_or_default();
-                    if tx.send(Bytes::from(format!("data: {data}\n\n"))).is_err() {
-                        break; // client gone
-                    }
-                }
-                Err(e) => {
-                    let payload = serde_json::json!({"error": {"code": "LLM_ERROR", "message": e.to_string()}});
-                    let _ = tx.send(Bytes::from(format!("data: {payload}\n\n")));
-                    break;
-                }
+        // Persist the assistant reply when a session is given (best-effort).
+        if let Some(ref sid) = session_id {
+            if let Ok(session_uuid) = Uuid::parse_str(sid) {
+                let resolved = model.clone().unwrap_or_else(|| "unknown".into());
+                let _ = session_store.save_message(
+                    session_uuid,
+                    "assistant",
+                    &reply,
+                    Some(&resolved),
+                    Some("stop"),
+                    Some(usage.total_tokens as i32),
+                    Some(usage.prompt_tokens as i32),
+                    Some(usage.completion_tokens as i32),
+                    None,
+                ).await;
             }
         }
+
+        let chunk = serde_json::json!({
+            "id": format!("chatcmpl-{}", Uuid::new_v4()),
+            "object": "chat.completion.chunk",
+            "model": model.clone().unwrap_or_else(|| "unknown".into()),
+            "choices": [{
+                "index": 0,
+                "delta": {"role": "assistant", "content": reply},
+                "finish_reason": "stop"
+            }],
+        });
+        let _ = tx.send(Bytes::from(format!("data: {chunk}\n\n")));
         let _ = tx.send(Bytes::from_static(b"data: [DONE]\n\n"));
     });
 
@@ -615,8 +671,7 @@ fn skill_system_prompt(skill_ids: &[String]) -> Option<String> {
         return None;
     }
     Some(format!(
-        "The user's intent has been routed to the following skill(s). \
-         Follow the skill guidance below and prefer invoking its tools when they can help:\n\n{}",
+        "当前对话已启用以下专业技能。请优先调用其工具获取真实数据，并按照对应 skill 的专业角色与规范回答用户问题：\n\n{}",
         sections.join("\n\n")
     ))
 }
