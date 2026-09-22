@@ -172,6 +172,7 @@ type UpdateSessionRequest struct {
 type SessionWithCount struct {
 	ID            string     `db:"id" json:"id"`
 	OrgID         string     `db:"org_id" json:"org_id"`
+	DeptID        string     `db:"dept_id" json:"dept_id"`
 	UserID        string     `db:"user_id" json:"user_id"`
 	Title         string     `db:"title" json:"title"`
 	Model         string     `db:"model" json:"model"`

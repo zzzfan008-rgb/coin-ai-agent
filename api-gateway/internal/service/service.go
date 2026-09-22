@@ -334,7 +334,7 @@ func NewSessionService(db *sqlx.DB) *SessionService {
 	return &SessionService{db: db}
 }
 
-func (s *SessionService) Create(ctx context.Context, orgID, userID uuid.UUID, req model.CreateSessionRequest) (*model.SessionWithCount, error) {
+func (s *SessionService) Create(ctx context.Context, orgID, deptID, userID uuid.UUID, req model.CreateSessionRequest) (*model.SessionWithCount, error) {
 	title := req.Title
 	if title == "" {
 		title = fmt.Sprintf("Session %s", time.Now().Format("2006-01-02 15:04"))
@@ -342,6 +342,7 @@ func (s *SessionService) Create(ctx context.Context, orgID, userID uuid.UUID, re
 	var row struct {
 		ID         uuid.UUID `db:"id"`
 		OrgID      uuid.UUID `db:"org_id"`
+		DeptID     uuid.UUID `db:"dept_id"`
 		UserID     uuid.UUID `db:"user_id"`
 		Title      string    `db:"title"`
 		IsArchived bool      `db:"is_archived"`
@@ -349,15 +350,16 @@ func (s *SessionService) Create(ctx context.Context, orgID, userID uuid.UUID, re
 		UpdatedAt  time.Time `db:"updated_at"`
 	}
 	err := s.db.GetContext(ctx, &row,
-		`INSERT INTO sessions(org_id, user_id, title) VALUES($1,$2,$3)
-		 RETURNING id, org_id, user_id, title, is_archived, created_at, updated_at`,
-		orgID, userID, title)
+		`INSERT INTO sessions(org_id, dept_id, user_id, title) VALUES($1,$2,$3,$4)
+		 RETURNING id, org_id, dept_id, user_id, title, is_archived, created_at, updated_at`,
+		orgID, deptID, userID, title)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}
 	return &model.SessionWithCount{
 		ID:         row.ID.String(),
 		OrgID:      row.OrgID.String(),
+		DeptID:     row.DeptID.String(),
 		UserID:     row.UserID.String(),
 		Title:      row.Title,
 		IsArchived: row.IsArchived,

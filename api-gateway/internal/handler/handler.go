@@ -310,9 +310,10 @@ func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	claims := middleware.GetClaims(r.Context())
 	orgID, _ := parseUUID(claims.OrgID)
+	deptID, _ := parseUUID(claims.DeptID)
 	userID, _ := parseUUID(claims.Subject)
 
-	session, err := h.svc.Create(r.Context(), orgID, userID, req)
+	session, err := h.svc.Create(r.Context(), orgID, deptID, userID, req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
