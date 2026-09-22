@@ -498,7 +498,7 @@ func (s *SessionService) Update(ctx context.Context, orgID, sessionID uuid.UUID,
 }
 
 func (s *SessionService) GetMessages(ctx context.Context, sessionID uuid.UUID, limit int, before string) (*model.MessageList, error) {
-	var rows []model.MessageDTO
+	rows := []model.MessageDTO{}
 	var err error
 	if before != "" {
 		err = s.db.SelectContext(ctx, &rows,

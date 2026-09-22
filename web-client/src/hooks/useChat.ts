@@ -32,7 +32,7 @@ export function useChat(initialSessionId?: string) {
       setCurrentSession(s)
       try {
         const { messages: msgs } = await listMessages(s.id)
-        setMessages(msgs)
+        setMessages(msgs ?? [])
       } catch (e) {
         setError(e instanceof Error ? e.message : '消息加载失败')
       }
