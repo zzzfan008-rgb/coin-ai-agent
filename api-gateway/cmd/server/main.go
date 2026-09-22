@@ -214,7 +214,7 @@ func main() {
 		api.HandleFunc("/mcp/servers", mcpH2.Register).Methods(http.MethodPost)
 		api.HandleFunc("/mcp/servers", mcpH2.List).Methods(http.MethodGet)
 		api.HandleFunc("/mcp/servers/{id}", mcpH2.Delete).Methods(http.MethodDelete)
-		api.HandleFunc("/mcp/servers/{id}/user", mcpH2.ToggleUser).Methods(http.MethodPut)
+		api.HandleFunc("/mcp/servers/{id}/toggle", mcpH2.ToggleUser).Methods(http.MethodPost)
 
 		// Core-backed endpoints (transparent reverse proxy; identity injected
 		// from JWT as X-Auth-* headers). These proxy to the same paths on core.

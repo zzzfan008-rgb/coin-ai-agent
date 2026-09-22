@@ -247,22 +247,23 @@ type ProjectList struct {
 
 // ─── MCP servers (T-016) ─────────────────────────────────────────────────────
 
+// McpServerRequest 对齐前端注册表单 {id, name?, endpoint_url}。
 type McpServerRequest struct {
-	Name       string            `json:"name" validate:"required"`
-	ServerType string            `json:"server_type"` // stdio | http
-	Endpoint   string            `json:"endpoint"`
-	AuthToken  string            `json:"auth_token,omitempty"`
-	EnvVars    map[string]string `json:"env_vars"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	EndpointURL string `json:"endpoint_url"`
 }
 
+// McpServerDTO 对齐前端 McpServer 契约。
 type McpServerDTO struct {
-	ID         string `db:"id" json:"id"`
-	OrgID      string `db:"org_id" json:"org_id"`
-	Name       string `db:"name" json:"name"`
-	ServerType string `db:"server_type" json:"server_type"`
-	Endpoint   *string `db:"endpoint" json:"endpoint"`
-	IsActive   bool   `db:"is_active" json:"is_active"`
-	CreatedAt  string `db:"created_at" json:"created_at"`
+	ID           string `json:"id"`
+	OrgID        string `json:"org_id"`
+	Name         string `json:"name"`
+	EndpointURL  string `json:"endpoint_url"`
+	HealthStatus string `json:"health_status"` // healthy | unhealthy | unknown
+	Enabled      bool   `json:"enabled"`       // 当前用户是否启用
+	ToolCount    int    `json:"tool_count"`
+	CreatedAt    string `json:"created_at"`
 }
 
 type McpServerList struct {
@@ -272,10 +273,6 @@ type McpServerList struct {
 
 type McpUserToggleRequest struct {
 	Enabled bool `json:"enabled"`
-}
-
-type McpUserServersResponse struct {
-	McpServerIDs []string `json:"mcp_server_ids"`
 }
 
 // ─── Users ───────────────────────────────────────────────────────────────────

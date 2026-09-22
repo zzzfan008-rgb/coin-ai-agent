@@ -38,8 +38,8 @@ func (h *McpHandler) Register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
 		return
 	}
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "name is required")
+	if req.ID == "" && req.Name == "" {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "id or name is required")
 		return
 	}
 
@@ -61,7 +61,8 @@ func (h *McpHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	orgID, _ := uuid.Parse(claims.OrgID)
-	servers, err := h.svc.List(r.Context(), orgID)
+	userID, _ := uuid.Parse(claims.Subject)
+	servers, err := h.svc.List(r.Context(), orgID, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
@@ -116,10 +117,10 @@ func (h *McpHandler) ToggleUser(w http.ResponseWriter, r *http.Request) {
 
 	orgID, _ := uuid.Parse(claims.OrgID)
 	userID, _ := uuid.Parse(claims.Subject)
-	ids, err := h.svc.SetUserEnabled(r.Context(), orgID, userID, serverID, req.Enabled)
+	dto, err := h.svc.SetUserEnabled(r.Context(), orgID, userID, serverID, req.Enabled)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, model.McpUserServersResponse{McpServerIDs: ids})
+	writeJSON(w, http.StatusOK, dto)
 }
