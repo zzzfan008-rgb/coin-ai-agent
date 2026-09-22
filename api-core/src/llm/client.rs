@@ -105,8 +105,17 @@ impl LlmClient {
             (&self.minimax, model.to_string())
         } else if model.starts_with("qwen") {
             (&self.qwen, model.to_string())
+        } else if model.is_empty() || model == "fashion-ai-default" {
+            // Placeholder / empty model name → use the default provider's
+            // configured default model (never forward a made-up name upstream).
+            match self.default_provider.as_str() {
+                "deepseek" => (&self.deepseek, self.deepseek.model.clone()),
+                "qwen" => (&self.qwen, self.qwen.model.clone()),
+                _ => (&self.minimax, self.minimax.model.clone()),
+            }
         } else {
-            // Use default provider.
+            // Unknown explicit model → still route by default provider, but the
+            // caller asked for a specific name, so forward it as-is.
             match self.default_provider.as_str() {
                 "deepseek" => (&self.deepseek, model.to_string()),
                 "qwen" => (&self.qwen, model.to_string()),
