@@ -195,13 +195,13 @@ type MessageList struct {
 }
 
 type MessageDTO struct {
-	ID         string    `json:"id"`
-	Role       string    `json:"role"`
-	Content    string    `json:"content"`
-	Model      string    `json:"model"`
-	FinishReason string  `json:"finish_reason"`
-	TokenCount int       `json:"token_count"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID           string    `db:"id" json:"id"`
+	Role         string    `db:"role" json:"role"`
+	Content      string    `db:"content" json:"content"`
+	Model        string    `db:"model" json:"model"`
+	FinishReason string    `db:"finish_reason" json:"finish_reason"`
+	TokenCount   int       `db:"token_count" json:"token_count"`
+	CreatedAt    time.Time `db:"created_at" json:"created_at"`
 }
 
 // ─── Projects ─────────────────────────────────────────────────────────────────
