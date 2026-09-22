@@ -39,11 +39,18 @@ pub struct AppConfig {
     pub qwen_model: String,
     pub qwen_base_url: String,
 
-    // MinIO
+    // MiniIO
     pub minio_endpoint: String,
     pub minio_bucket: String,
     pub minio_access_key: String,
     pub minio_secret_key: String,
+
+    // SSE timeouts (T-022)
+    /// Max seconds without data before sending a keepalive comment.
+    /// Keepalive interval = min(45s, SSE_IDLE_TIMEOUT / 2).
+    pub sse_idle_timeout_secs: u64,
+    /// Max seconds for a complete streaming turn.
+    pub sse_write_timeout_secs: u64,
 }
 
 impl AppConfig {
@@ -90,6 +97,9 @@ impl AppConfig {
             minio_bucket: env_var("MINIO_BUCKET", "fashion-ai"),
             minio_access_key: env_var("MINIO_ROOT_USER", "minioadmin"),
             minio_secret_key: env_var("MINIO_ROOT_PASSWORD", "minioadmin"),
+
+            sse_idle_timeout_secs: env_parse("SSE_IDLE_TIMEOUT", 120u64),
+            sse_write_timeout_secs: env_parse("SSE_WRITE_TIMEOUT", 300u64),
         })
     }
 }

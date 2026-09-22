@@ -1,12 +1,15 @@
 package handler
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 
+	"fashionai/api-gateway/internal/config"
 	"fashionai/api-gateway/internal/middleware"
 )
 
@@ -14,6 +17,8 @@ import (
 // stripping any client-supplied identity headers and re-injecting them from the
 // verified JWT claims. The core therefore never has to trust org/dept values
 // sent by the browser.
+// For SSE responses it sets X-Accel-Buffering: no to prevent buffering, and
+// injects X-SSE-Idle-Timeout / X-SSE-Write-Timeout headers (T-022).
 func CoreReverseProxy(coreURL string) http.Handler {
 	return buildProxy(coreURL, nil)
 }
@@ -33,6 +38,19 @@ func buildProxy(coreURL string, pathRewrite func(*http.Request)) http.Handler {
 		log.Printf("[ERROR] invalid core URL %q: %v", coreURL, err)
 	}
 	proxy := httputil.NewSingleHostReverseProxy(target)
+
+	// T-022: SSE timeout config (defaults match core defaults)
+	sseIdle := 120
+	sseWrite := 300
+	if cfg := config.Load(); cfg != nil {
+		if cfg.SSEIdleTimeoutSecs > 0 {
+			sseIdle = cfg.SSEIdleTimeoutSecs
+		}
+		if cfg.SSEWriteTimeoutSecs > 0 {
+			sseWrite = cfg.SSEWriteTimeoutSecs
+		}
+	}
+
 	baseDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		baseDirector(req)
@@ -50,12 +68,29 @@ func buildProxy(coreURL string, pathRewrite func(*http.Request)) http.Handler {
 			req.Header.Set("X-Auth-Dept-Id", claims.DeptID)
 			req.Header.Set("X-Auth-Role", claims.Role)
 		}
+		// T-022: Inject SSE timeout hints so core can configure timeouts
+		// even when running behind the gateway (core receives these via env
+		// and also via upstream headers).
+		req.Header.Set("X-SSE-Idle-Timeout", strconv.Itoa(sseIdle))
+		req.Header.Set("X-SSE-Write-Timeout", strconv.Itoa(sseWrite))
 	}
+
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		// T-022: for SSE responses, disable upstream buffering.
+		// Check by Content-Type header to avoid needing to peek at request.
+		if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+			resp.Header.Set("X-Accel-Buffering", "no")
+		}
+		return nil
+	}
+
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Printf("[ERROR] core proxy: %v", err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
-		_, _ = w.Write([]byte(`{"error":{"code":"CORE_UNREACHABLE","message":"core service unreachable"}}`))
+		_, _ = w.Write([]byte(fmt.Sprintf(
+			`{"error":{"code":"CORE_UNREACHABLE","message":"核心服务不可用，请稍后重试"}}`,
+		)))
 	}
 	return proxy
 }

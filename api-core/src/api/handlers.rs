@@ -5,16 +5,13 @@ use std::sync::Arc;
 use sqlx::Row;
 use axum::{
     extract::{Multipart, Path, Query, State, Request},
-    http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
@@ -481,16 +478,72 @@ async fn stream_chat(state: Arc<AppServices>, req: CoreChatRequest) -> Response 
         let _ = tx.send(Bytes::from_static(b"data: [DONE]\n\n"));
     });
 
-    let body_stream = BroadcastStream::new(rx)
-        .filter_map(|r| async { r.ok().map(Ok::<Bytes, BroadcastStreamRecvError>) });
+    use std::pin::pin;
+    use std::time::Duration;
+    use tokio::time::interval;
+    use futures::StreamExt as Fs; // T-022: for filter_map
 
-    let mut response = axum::body::Body::from_stream(body_stream).into_response();
-    *response.status_mut() = StatusCode::OK;
+    let idle_secs = state.config.sse_idle_timeout_secs;
+    // T-022: keepalive interval = min(45s, idle/2) so at least one ping
+    // lands before the 60s EventSource reconnect threshold.
+    let keepalive_interval_secs = idle_secs.min(45).max(10) / 2;
+
+    // Separate channel so keepalive ticks don't block data delivery.
+    let (ka_tx, _ka_rx) = tokio::sync::broadcast::channel::<()>(1);
+
+    // Keepalive ticker: fires SSE comment events at keepalive_interval_secs.
+    // The `:` comment format is silently dropped by EventSource but resets
+    // its 60s reconnect timer, preventing spurious mid-stream reconnects.
+    // We emit raw Bytes (SSE wire format) so Body::from_stream can consume
+    // the stream directly without needing Sse::new (which requires Ok=Event).
+    let ka_stream = Box::pin(async_stream::stream! {
+        let mut ticker = pin!(interval(Duration::from_secs(keepalive_interval_secs)));
+        loop {
+            ticker.as_mut().tick().await;
+            let _ = ka_tx.send(());
+            // SSE comment: ": keepalive\n\n" — no data/event/id fields.
+            yield Ok::<_, std::convert::Infallible>(Bytes::from_static(b": keepalive\n\n"));
+        }
+    });
+
+    // Data events: forward non-empty broadcast chunks as SSE data events.
+    // Fs::filter_map drops empty keepalive-ping slots and receiver errors.
+    // Emit raw Bytes so the merged stream is TryStream<Ok = Bytes>.
+    let data_stream = Box::pin(Fs::filter_map(BroadcastStream::new(rx), |r| async move {
+        match r {
+            Ok(bytes) if !bytes.is_empty() => {
+                // SSE data event: "data: <content>\n\n"
+                let sse = format!("data: {}\n\n", String::from_utf8_lossy(&bytes));
+                Some(Ok::<_, std::convert::Infallible>(Bytes::from(sse)))
+            }
+            Ok(_) | Err(_) => None,
+        }
+    }));
+
+    // Merge both streams. Both emit Bytes so merged is TryStream<Ok = Bytes>.
+    let merged = tokio_stream::StreamExt::merge(data_stream, ka_stream);
+
+    let mut response = axum::response::Response::new(
+        axum::body::Body::from_stream(merged),
+    );
     let headers = response.headers_mut();
-    headers.insert("Content-Type", "text/event-stream".parse().unwrap());
-    headers.insert("Cache-Control", "no-cache".parse().unwrap());
-    headers.insert("Connection", "keep-alive".parse().unwrap());
-    headers.insert("X-Accel-Buffering", "no".parse().unwrap());
+    headers.insert(axum::http::header::CONTENT_TYPE, "text/event-stream".parse().unwrap());
+    headers.insert(axum::http::header::CACHE_CONTROL, "no-cache".parse().unwrap());
+    headers.insert(axum::http::header::CONNECTION, "keep-alive".parse().unwrap());
+    // T-022: disable proxy/nginx buffering for SSE
+    headers.insert(
+        axum::http::header::HeaderName::from_static("x-accel-buffering"),
+        "no".parse().unwrap(),
+    );
+    // T-022: expose configured timeouts for gateway / debugging
+    headers.insert(
+        axum::http::header::HeaderName::from_static("x-sse-idle-timeout"),
+        idle_secs.to_string().parse().unwrap(),
+    );
+    headers.insert(
+        axum::http::header::HeaderName::from_static("x-sse-write-timeout"),
+        state.config.sse_write_timeout_secs.to_string().parse().unwrap(),
+    );
     response
 }
 

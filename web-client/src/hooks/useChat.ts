@@ -21,6 +21,10 @@ export function useChat(initialSessionId?: string) {
   const [messages, setMessages] = useState<SessionMessage[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // T-022: stream-disconnect flag — distinct from transient errors so
+  // the UI can show a dedicated "connection lost" banner instead of
+  // re-throwing the same fetch error on every keystroke.
+  const [streamDisconnected, setStreamDisconnected] = useState(false)
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([])
   const [loaded, setLoaded] = useState(false)
 
@@ -187,11 +191,18 @@ export function useChat(initialSessionId?: string) {
             content: m.content + (m.content ? '\n\n_（已停止生成）_' : ''),
           }))
         } else {
+          // T-022: distinguish stream-disconnect from other errors.
+          // If partial content arrived before the error, the stream was
+          // interrupted mid-reply → show a friendly reconnect prompt.
+          const hadContent = assistantMsg.content !== ''
+          if (hadContent) {
+            setStreamDisconnected(true)
+          }
           const msg = e instanceof Error ? e.message : 'AI 回复失败'
-          setError(msg)
+          setError(hadContent ? null : msg)
           patchAssistant((m) => ({
             ...m,
-            content: m.content || `⚠️ ${msg}`,
+            content: m.content || `⚠️ 连接中断，请重试`,
           }))
         }
       } finally {
@@ -209,18 +220,32 @@ export function useChat(initialSessionId?: string) {
     [messages, isStreaming, currentSession, selectedSkillIds, refreshSessions],
   )
 
+  // T-022: manual reconnect for a stream that dropped mid-reply.
+  // Resends the last user message to re-establish the stream.
+  const retryStream = useCallback(async () => {
+    if (!streamDisconnected || messages.length === 0 || isStreaming) return
+    const lastUser = [...messages].reverse().find((m) => m.role === 'user')
+    if (lastUser) {
+      setStreamDisconnected(false)
+      setError(null)
+      await sendMessage(lastUser.content)
+    }
+  }, [streamDisconnected, messages, isStreaming, sendMessage])
+
   return {
     sessions,
     currentSession,
     messages,
     isStreaming,
     error,
+    streamDisconnected,
     loaded,
     selectedSkillIds,
     selectSession,
     newSession,
     sendMessage,
     stopStreaming,
+    retryStream,
     toggleSkill,
   }
 }

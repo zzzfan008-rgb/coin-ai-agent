@@ -4,6 +4,8 @@ import {
   PanelRight,
   AlertCircle,
   FolderPlus,
+  RefreshCw,
+  WifiOff,
 } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useChat } from '../hooks/useChat'
@@ -128,6 +130,13 @@ export default function Chat() {
         <h1 className="min-w-0 flex-1 truncate text-sm font-medium text-content">
           {chat.currentSession?.title || '加载中…'}
         </h1>
+        {/* T-022: SSE connection status indicator */}
+        {chat.isStreaming && (
+          <span className="flex items-center gap-1.5 text-xs text-primary">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+            生成中
+          </span>
+        )}
         {chat.selectedSkillIds.length > 0 && (
           <span className="hidden rounded-md bg-primary/15 px-2 py-0.5 text-[11px] text-primary-light sm:block">
             {chat.selectedSkillIds.length} 个 Skill 已启用
@@ -163,7 +172,22 @@ export default function Chat() {
         </div>
       )}
 
-      {/* 以图搜图结果面板 */}
+      {/* T-022: stream-disconnect banner — friendly prompt, no tech detail */}
+      {chat.streamDisconnected && (
+        <div className="flex shrink-0 items-center gap-3 border-b border-warning/40 bg-warning/10 px-4 py-3 text-sm">
+          <WifiOff size={16} className="shrink-0 text-warning" />
+          <span className="flex-1 text-content">连接中断，请重试</span>
+          <button
+            type="button"
+            onClick={chat.retryStream}
+            disabled={chat.isStreaming}
+            className="flex items-center gap-1.5 rounded-md bg-warning px-3 py-1 text-xs font-medium text-black transition-colors hover:bg-warning/80 disabled:opacity-50"
+          >
+            <RefreshCw size={12} className={chat.isStreaming ? 'animate-spin' : ''} />
+            {chat.isStreaming ? '重连中…' : '重试'}
+          </button>
+        </div>
+      )}
       {similarPanel && (
         <SimilarImagesPanel
           queryUrl={similarPanel.queryUrl}
