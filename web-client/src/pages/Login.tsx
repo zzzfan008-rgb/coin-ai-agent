@@ -45,7 +45,7 @@ export default function Login() {
             <Shirt size={22} className="text-white" />
           </div>
           <h1 className="text-2xl font-semibold text-content">
-            Fashion AI Platform
+            Coin-AI
           </h1>
           <p className="mt-1 text-sm text-muted">登录以进入智能设计工作台</p>
         </div>

@@ -145,7 +145,7 @@ export const sessions: MockSession[] = [
   {
     id: 'sess-demo-0001',
     user_id: 'u-demo-0001',
-    title: '欢迎使用 Fashion AI',
+    title: '欢迎使用 Coin-AI',
     is_archived: false,
     created_at: now,
     updated_at: now,
@@ -158,7 +158,7 @@ export const messages: MockMessage[] = [
     session_id: 'sess-demo-0001',
     role: 'assistant',
     content:
-      '你好，我是 **Fashion AI 设计助手** 👋\n\n我可以帮你完成：\n\n- 🔍 **面料查询**：成分、适用季节、保养方式\n- 🎨 **色彩搭配**：配色方案、流行色分析\n- 💡 **款式灵感**：创意生成、款式变体\n\n试试在右侧面板选择一个 Skill，然后向我提问吧！',
+      '你好，我是 **Coin-AI 设计助手** 👋\n\n我可以帮你完成：\n\n- 🔍 **面料查询**：成分、适用季节、保养方式\n- 🎨 **色彩搭配**：配色方案、流行色分析\n- 💡 **款式灵感**：创意生成、款式变体\n\n试试在右侧面板选择一个 Skill，然后向我提问吧！',
     model: 'fashion-ai-default',
     created_at: now,
   },

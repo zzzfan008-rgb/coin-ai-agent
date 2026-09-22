@@ -66,7 +66,7 @@ export function Sidebar({
           <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary">
             <Shirt size={16} className="text-white" />
           </div>
-          <span className="text-[15px] font-semibold text-content">Fashion AI</span>
+          <span className="text-[15px] font-semibold text-content">Coin-AI</span>
         </div>
         {onClose && (
           <button
