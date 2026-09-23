@@ -21,8 +21,13 @@ type ChatService struct {
 func NewChatService(rustCoreURL string) *ChatService {
 	return &ChatService{
 		rustCoreURL: rustCoreURL,
-		httpClient:  &http.Client{Timeout: 60 * time.Second}, // 60s
+		httpClient:  &http.Client{Timeout: 120 * time.Second},
 	}
+}
+
+// RustCoreURL returns the configured core URL (useful for logging).
+func (s *ChatService) RustCoreURL() string {
+	return s.rustCoreURL
 }
 
 // ProxyRequest forwards a chat completion request to the Rust core.
@@ -86,8 +91,8 @@ func (s *ChatService) defaultModels() *model.ModelList {
 	return &model.ModelList{
 		Object: "list",
 		Data: []model.ModelEntry{
-			{ID: "gpt-4o", Object: "model", Created: 1712361441, OwnedBy: "fashion-ai"},
-			{ID: "deepseek-chat", Object: "model", Created: 1712361441, OwnedBy: "fashion-ai"},
+			{ID: "qwen-plus", Object: "model", Created: 1712361441, OwnedBy: "fashion-ai"},
+			{ID: "qwen-long", Object: "model", Created: 1712361441, OwnedBy: "fashion-ai"},
 		},
 	}
 }

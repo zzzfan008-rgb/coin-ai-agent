@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useChat } from '../hooks/useChat'
-import { useLayout } from '../components/Layout'
+import { useLayout } from '../hooks/useLayout'
 import { SkillPanel } from '../components/SkillPanel'
 import { MessageBubble } from '../components/MessageBubble'
 import { ChatInput } from '../components/ChatInput'

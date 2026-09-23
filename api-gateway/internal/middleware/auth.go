@@ -104,7 +104,10 @@ func JWTMiddleware(jwtSvc *auth.JWTService) mux.MiddlewareFunc {
 
 			// Track 1: read from httpOnly cookie (browser sessions)
 			if cookie, err := r.Cookie("token"); err == nil && cookie.Value != "" {
+				log.Printf("[DEBUG JWTMiddleware] cookie token found, len=%d", len(cookie.Value))
 				tokenString = cookie.Value
+			} else {
+				log.Printf("[DEBUG JWTMiddleware] no cookie token: %v | cookies: %v", err, r.Cookies())
 			}
 
 			// Track 2: fall back to Authorization: Bearer header (API clients)

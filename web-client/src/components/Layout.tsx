@@ -1,7 +1,5 @@
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useState,
 } from 'react'
@@ -11,6 +9,7 @@ import { useProjects } from '../hooks/useProjects'
 import { listSessions, type Session } from '../api/client'
 import { Sidebar } from './Sidebar'
 import { ProjectFormModal } from './ProjectFormModal'
+import { LayoutContext } from '../hooks/useLayout'
 
 interface LayoutContextValue {
   openSidebar: () => void
@@ -18,13 +17,8 @@ interface LayoutContextValue {
   setCurrentSessionId: (id?: string) => void
 }
 
-const LayoutContext = createContext<LayoutContextValue | null>(null)
-
-export function useLayout(): LayoutContextValue {
-  const ctx = useContext(LayoutContext)
-  if (!ctx) throw new Error('useLayout 必须在 AppLayout 内使用')
-  return ctx
-}
+export { LayoutContext }
+export type { LayoutContextValue }
 
 export function AppLayout() {
   const { user, logout } = useAuth()

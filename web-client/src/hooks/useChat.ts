@@ -3,7 +3,7 @@ import {
   createSession,
   listMessages,
   listSessions,
-  streamChatCompletion,
+  chatCompletion,
   type ChatMessage,
   type Session,
   type SessionMessage,
@@ -173,17 +173,13 @@ export function useChat(initialSessionId?: string) {
       }))
 
       try {
-        await streamChatCompletion(
-          {
-            messages: payload,
-            sessionId: currentSession.id,
-            skillIds: selectedSkillIds,
-            signal: controller.signal,
-          },
-          (chunk) => {
-            patchAssistant((m) => ({ ...m, content: m.content + chunk }))
-          },
-        )
+        const text = await chatCompletion({
+          messages: payload,
+          sessionId: currentSession.id,
+          skillIds: selectedSkillIds,
+          signal: controller.signal,
+        })
+        patchAssistant((m) => ({ ...m, content: text }))
       } catch (e) {
         if (controller.signal.aborted) {
           patchAssistant((m) => ({

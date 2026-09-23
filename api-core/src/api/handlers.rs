@@ -973,7 +973,8 @@ pub async fn upload_knowledge_document(
         r#"INSERT INTO knowledge_documents
                (id, org_id, dept_id, title, file_type, file_path, file_size, uploaded_by)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-           RETURNING id, org_id, dept_id, title, file_type, file_size, status"#,
+           RETURNING id, org_id, dept_id, title, file_type, file_size, status,
+                     description, uploaded_at, processed_at"#,
     )
     .bind(doc_id)
     .bind(org_id)
@@ -1029,11 +1030,99 @@ pub async fn upload_knowledge_document(
 // ── DELETE /api/knowledge/documents/:id ─────────────────────────────────────
 
 /// Soft-delete a knowledge document and remove its vectors from Qdrant.
-///
-/// Scoped by org + dept from the (trusted internal) query params
-/// `org_id` / `dept_id` so a caller cannot delete another tenant's document
-/// by guessing a UUID. Sets `status=deleted`, `deleted_at=NOW()` and
-/// deletes every Qdrant point whose payload `doc_id` matches.
+/// PATCH /api/knowledge/documents/:id
+/// Update title and/or description of an existing knowledge document.
+pub async fn update_knowledge_document(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path(doc_id): Path<Uuid>,
+    Query(q): Query<KnowledgeDocDeleteQuery>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<Value>, crate::error::AppError> {
+    let (h_org, h_dept, _) = header_identity(&headers);
+    let org = h_org
+        .as_deref()
+        .map(Uuid::parse_str)
+        .and_then(Result::ok)
+        .or(q.org_id.clone())
+        .ok_or_else(|| crate::error::AppError::BadRequest("org_id required".into()))?;
+    let dept = h_dept
+        .as_deref()
+        .map(Uuid::parse_str)
+        .and_then(Result::ok)
+        .or(q.dept_id.clone())
+        .ok_or_else(|| crate::error::AppError::BadRequest("dept_id required".into()))?;
+
+    // Build dynamic SET clause from provided fields
+    let mut sets: Vec<String> = vec![];
+    let mut bind_idx: usize = 1;
+
+    if let Some(title) = body.get("filename").and_then(|v| v.as_str()) {
+        sets.push(format!("title = ${}", bind_idx));
+        bind_idx += 1;
+    }
+    if let Some(desc) = body.get("description").and_then(|v| v.as_str()) {
+        sets.push(format!("description = ${}", bind_idx));
+        bind_idx += 1;
+    }
+
+    if sets.is_empty() {
+        return Err(crate::error::AppError::BadRequest(
+            "provide at least one field to update: filename or description".into(),
+        ));
+    }
+
+    let query_str = format!(
+        "UPDATE knowledge_documents SET {} WHERE id = ${} AND org_id = ${} AND dept_id = ${} AND deleted_at IS NULL",
+        sets.join(", "),
+        bind_idx,
+        bind_idx + 1,
+        bind_idx + 2,
+    );
+
+    let mut q = sqlx::query(&query_str);
+    if let Some(title) = body.get("filename").and_then(|v| v.as_str()) {
+        q = q.bind(title);
+    }
+    if let Some(desc) = body.get("description").and_then(|v| v.as_str()) {
+        q = q.bind(desc);
+    }
+    q = q.bind(doc_id).bind(org).bind(dept);
+
+    let result = q.execute(state.session_store.pool()).await?;
+    if result.rows_affected() == 0 {
+        return Err(crate::error::AppError::NotFound(
+            "knowledge document not found or access denied".into(),
+        ));
+    }
+
+    // Re-fetch updated row
+    let row = sqlx::query(
+        "SELECT id, title, file_type, status, chunk_count, description, uploaded_at, processed_at
+         FROM knowledge_documents WHERE id = $1",
+    )
+    .bind(doc_id)
+    .fetch_one(state.session_store.pool())
+    .await?;
+
+    let uploaded_at: chrono::DateTime<chrono::Utc> = row.get("uploaded_at");
+    let processed_at: Option<chrono::DateTime<chrono::Utc>> = row.try_get("processed_at").ok();
+
+    Ok(Json(serde_json::json!({
+        "id": row.get::<Uuid, _>("id").to_string(),
+        "filename": row.get::<String, _>("title"),
+        "file_type": row.get::<String, _>("file_type"),
+        "status": row.get::<String, _>("status"),
+        "chunk_count": row.get::<i32, _>("chunk_count"),
+        "created_at": uploaded_at,
+        "updated_at": processed_at,
+        "description": row.try_get::<String, _>("description").unwrap_or_default(),
+    })))
+}
+
+// ── DELETE /api/knowledge/documents/:id ─────────────────────────────────────
+
+/// Soft-delete a knowledge document and remove its vectors from Qdrant.
 pub async fn delete_knowledge_document(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -1121,7 +1210,8 @@ pub async fn list_knowledge_documents(
 
     let rows = sqlx::query(
         r#"SELECT id, org_id, dept_id, title, file_type, status, chunk_count,
-                  uploaded_by, error_message, uploaded_at, processed_at
+                  uploaded_by, error_message, uploaded_at, processed_at,
+                  COALESCE(description, '') as description
            FROM knowledge_documents
            WHERE org_id = $1 AND dept_id = $2 AND deleted_at IS NULL
            ORDER BY uploaded_at DESC"#,
@@ -1149,6 +1239,7 @@ pub async fn list_knowledge_documents(
                 "error": r.try_get::<String, _>("error_message").ok(),
                 "created_at": uploaded_at,
                 "updated_at": processed_at,
+                "description": r.get::<String, _>("description"),
             })
         })
         .collect();

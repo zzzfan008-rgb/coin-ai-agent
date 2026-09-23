@@ -7,11 +7,15 @@ import {
   CheckCircle2,
   XCircle,
   Clock,
+  Pencil,
+  Save,
+  X,
 } from 'lucide-react'
 import {
   deleteKnowledgeDocument,
   listKnowledgeDocuments,
   uploadKnowledgeDocument,
+  updateKnowledgeDocument,
   KNOWLEDGE_ALLOWED_EXT,
   type KnowledgeDocument,
   type KnowledgeDocStatus,
@@ -71,6 +75,12 @@ export default function KnowledgeAdmin() {
   const [dragOver, setDragOver] = useState(false)
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
+
+  // 编辑描述
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editDesc, setEditDesc] = useState('')
+  const [editSaving, setEditSaving] = useState(false)
+
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const refresh = useCallback(async () => {
@@ -151,6 +161,25 @@ export default function KnowledgeAdmin() {
     }
   }, [confirmId, refresh])
 
+  const handleEditStart = useCallback((doc: KnowledgeDocument) => {
+    setEditingId(doc.id)
+    setEditDesc(doc.description ?? '')
+  }, [])
+
+  const handleEditSave = useCallback(async () => {
+    if (!editingId) return
+    setEditSaving(true)
+    try {
+      await updateKnowledgeDocument(editingId, { description: editDesc })
+      await refresh()
+      setEditingId(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '保存失败')
+    } finally {
+      setEditSaving(false)
+    }
+  }, [editingId, editDesc, refresh])
+
   const confirmDoc = docs.find((d) => d.id === confirmId)
 
   return (
@@ -218,6 +247,7 @@ export default function KnowledgeAdmin() {
                 <th className="px-4 py-3 font-medium">类型</th>
                 <th className="px-4 py-3 font-medium">状态</th>
                 <th className="px-4 py-3 font-medium">切片数</th>
+                <th className="w-80 min-w-64 px-4 py-3 font-medium">描述</th>
                 <th className="px-4 py-3 font-medium">上传时间</th>
                 <th className="px-4 py-3 font-medium text-right">操作</th>
               </tr>
@@ -225,13 +255,13 @@ export default function KnowledgeAdmin() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-faint">
+                  <td colSpan={7} className="px-4 py-10 text-center text-faint">
                     <Loader2 size={18} className="mx-auto animate-spin" />
                   </td>
                 </tr>
               ) : docs.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-faint">
+                  <td colSpan={7} className="px-4 py-10 text-center text-faint">
                     暂无文档，请上传
                   </td>
                 </tr>
@@ -239,6 +269,7 @@ export default function KnowledgeAdmin() {
                 docs.map((d) => {
                   const meta = STATUS_META[d.status]
                   const Icon = meta.icon
+                  const isEditing = editingId === d.id
                   return (
                     <tr
                       key={d.id}
@@ -272,19 +303,75 @@ export default function KnowledgeAdmin() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-muted">{d.chunk_count || '-'}</td>
+                      {/* 描述 */}
+                      <td className="w-80 min-w-64 px-4 py-3">
+                        {isEditing ? (
+                          <div className="flex items-center gap-1">
+                            <input
+                              value={editDesc}
+                              onChange={(e) => setEditDesc(e.target.value)}
+                              maxLength={60}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') void handleEditSave()
+                                if (e.key === 'Escape') setEditingId(null)
+                              }}
+                              className="w-full max-w-[500px] rounded border border-border bg-bg px-2 py-1 text-xs text-content focus:border-primary focus:outline-none"
+                              placeholder="输入文件描述…"
+                              autoFocus
+                            />
+                            <span className="shrink-0 text-xs text-faint">{editDesc.length}/60</span>
+                            <button
+                              onClick={() => void handleEditSave()}
+                              disabled={editSaving}
+                              className="shrink-0 rounded p-1 text-primary hover:bg-primary/10 disabled:opacity-50"
+                              title="保存"
+                            >
+                              {editSaving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+                            </button>
+                            <button
+                              onClick={() => setEditingId(null)}
+                              disabled={editSaving}
+                              className="shrink-0 rounded p-1 text-faint hover:bg-surface-elevated disabled:opacity-50"
+                              title="取消"
+                            >
+                              <X size={13} />
+                            </button>
+                          </div>
+                        ) : (
+                          <p
+                            className="w-full truncate text-xs text-muted"
+                            title={d.description || '暂无描述，点击编辑'}
+                          >
+                            {d.description || (
+                              <span className="italic text-faint/60">暂无描述</span>
+                            )}
+                          </p>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-muted">
                         {formatTime(d.created_at)}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => setConfirmId(d.id)}
-                          disabled={d.status === 'pending' || d.status === 'indexing'}
-                          title="删除文档"
-                          className="rounded-md p-1.5 text-faint transition-colors hover:bg-error/10 hover:text-error disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          <Trash2 size={15} />
-                        </button>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleEditStart(d)}
+                            disabled={d.status === 'pending' || d.status === 'indexing'}
+                            title="编辑描述"
+                            className="rounded-md p-1.5 text-faint transition-colors hover:bg-surface-elevated hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmId(d.id)}
+                            disabled={d.status === 'pending' || d.status === 'indexing'}
+                            title="删除文档"
+                            className="rounded-md p-1.5 text-faint transition-colors hover:bg-error/10 hover:text-error disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   )

@@ -507,6 +507,8 @@ mod tests {
             minio_bucket: String::new(),
             minio_access_key: String::new(),
             minio_secret_key: String::new(),
+            sse_idle_timeout_secs: 120,
+            sse_write_timeout_secs: 300,
         }
     }
 

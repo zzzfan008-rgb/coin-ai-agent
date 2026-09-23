@@ -56,7 +56,9 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/api/knowledge/documents/:id",
-            delete(handlers::delete_knowledge_document),
+            axum::routing::MethodRouter::new()
+                .patch(handlers::update_knowledge_document)
+                .delete(handlers::delete_knowledge_document),
         )
         // Intent classification (T-014)
         .route(

@@ -11,6 +11,7 @@ p, *, admin, *, *, *
 p, *, designer, *, skill:fabric-query, execute
 p, *, designer, *, skill:color-matching, execute
 p, *, designer, *, skill:style-inspiration, execute
+p, *, designer, *, skill:dreamina-cli, execute
 
 # Designer — can invoke allowed enterprise MCP tools (T-016).
 p, *, designer, *, mcp:local-mock/fabric_search_db, invoke

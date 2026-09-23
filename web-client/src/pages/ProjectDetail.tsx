@@ -17,7 +17,7 @@ import {
   updateProject,
   type ProjectDetail,
 } from '../api/client'
-import { useLayout } from '../components/Layout'
+import { useLayout } from '../hooks/useLayout'
 import { ProjectFormModal } from '../components/ProjectFormModal'
 import { AddSessionsModal } from '../components/AddSessionsModal'
 

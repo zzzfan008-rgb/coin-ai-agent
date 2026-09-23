@@ -1,4 +1,4 @@
-import { Check, Palette, Shirt, Lightbulb, X, Wrench, type LucideIcon } from 'lucide-react'
+import { Check, Palette, Shirt, Lightbulb, X, Wrench, Wand2, type LucideIcon } from 'lucide-react'
 import type { SkillInfo } from '../api/client'
 
 interface SkillPanelProps {
@@ -12,6 +12,7 @@ const ICONS: Record<string, LucideIcon> = {
   'fabric-query': Shirt,
   'color-matching': Palette,
   'style-inspiration': Lightbulb,
+  'dreamina-cli': Wand2,
 }
 
 export function SkillPanel({

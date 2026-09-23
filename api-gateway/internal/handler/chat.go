@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -42,37 +44,51 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
 		return
 	}
+
 	if req.Model == "" {
-		req.Model = "gpt-4o"
+		req.Model = "qwen-plus"
+	}
+	switch req.Model {
+	case "gpt-4o", "fashion-ai-default":
+		req.Model = "qwen-plus"
 	}
 
-	// Inject user_context from JWT claims
+	isStream := req.Stream != nil && *req.Stream
+	log.Printf("[chat completions] model=%s stream=%v cookies=%v", req.Model, isStream, r.Cookies())
+	log.Printf("[chat completions] rustCoreURL=%s", h.chatSvc.RustCoreURL())
+
 	claims := middleware.GetClaims(r.Context())
 	userID, orgID, deptID, role := "", "", "", ""
 	if claims != nil {
 		userID, orgID, deptID, role = claims.Subject, claims.OrgID, claims.DeptID, claims.Role
 	}
 
-	// Proxy to Rust core with user_context injected
-	resp, err := h.chatSvc.ProxyRequestWithContext(r.Context(), req, userID, orgID, deptID, role, middleware.GetClientIP(r))
+	// Use a detached context with 90s timeout so browser cancel/refresh
+	// doesn't abort the upstream core request mid-stream.
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	resp, err := h.chatSvc.ProxyRequestWithContext(ctx, req, userID, orgID, deptID, role, middleware.GetClientIP(r))
 	if err != nil {
-		log.Printf("[chat] proxy error: %v", err)
+		log.Printf("[chat completions] ProxyRequestWithContext error: %v", err)
 		writeError(w, http.StatusBadGateway, "UPSTREAM_ERROR", "failed to reach core service")
 		return
 	}
 	defer resp.Body.Close()
 
-	// Check stream flag (pointer so may be nil)
-	isStream := req.Stream != nil && *req.Stream
+	log.Printf("[chat completions] core status=%d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		log.Printf("[chat completions] core non-200: status=%d body=%s", resp.StatusCode, string(bodyBytes))
+		resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	}
+
 	if isStream {
-		// Set SSE headers
 		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		w.Header().Set("Transfer-Encoding", "chunked")
+		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
 
-		// Flush chunks as they arrive from Rust core
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "streaming not supported")
@@ -80,18 +96,21 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		buf := make([]byte, 4096)
+		first := true
 		for {
 			n, err := resp.Body.Read(buf)
 			if n > 0 {
+				log.Printf("[chat completions] streaming chunk len=%d first=%v", n, first)
 				_, _ = w.Write(buf[:n])
 				flusher.Flush()
+				first = false
 			}
 			if err != nil {
+				log.Printf("[chat completions] stream ended err=%v", err)
 				break
 			}
 		}
 	} else {
-		// Non-streaming: forward the JSON response
 		w.Header().Set("Content-Type", "application/json")
 		io.Copy(w, resp.Body)
 	}
@@ -116,7 +135,6 @@ func (h *ChatHandler) WSChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate JWT — reject garbage tokens instead of upgrading blindly
 	claims, err := h.jwtSvc.Validate(token)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid or expired token")
@@ -133,7 +151,6 @@ func (h *ChatHandler) WSChat(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.Close()
 
-	// Handle incoming messages (JSON frames)
 	for {
 		_, msgBytes, err := ws.ReadMessage()
 		if err != nil {
@@ -143,14 +160,12 @@ func (h *ChatHandler) WSChat(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		// Expect a ChatCompletionRequest JSON frame
 		var req model.ChatCompletionRequest
 		if err := json.Unmarshal(msgBytes, &req); err != nil {
 			ws.WriteJSON(map[string]string{"error": "bad_request: invalid JSON frame"})
 			continue
 		}
 
-		// Force non-streaming for WebSocket simplicity
 		falseVal := false
 		req.Stream = &falseVal
 
@@ -161,7 +176,6 @@ func (h *ChatHandler) WSChat(w http.ResponseWriter, r *http.Request) {
 		}
 		defer resp.Body.Close()
 
-		// Forward the response back over WebSocket
 		var chatResp model.ChatCompletionResponse
 		if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
 			ws.WriteJSON(map[string]string{"error": "parse_error: failed to parse core response"})
@@ -201,18 +215,9 @@ func (h *PingPongHandler) Ping(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// parseExtraBody extracts session_id, skill_ids, etc. from extra_body.
-func parseExtraBody(body []byte) (*model.ExtraBody, error) {
-	var raw struct {
-		ExtraBody *model.ExtraBody `json:"extra_body"`
-	}
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, err
-	}
-	return raw.ExtraBody, nil
-}
-
 // normalizePath converts paths like /api/sessions/{id} to /api/sessions/* for RBAC matching.
 func normalizePath(template string) string {
 	return strings.ReplaceAll(template, "{id}", "*")
 }
+
+

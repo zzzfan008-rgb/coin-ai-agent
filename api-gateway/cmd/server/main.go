@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -254,6 +255,33 @@ func main() {
 		// WebSocket (JWT via query param)
 		ws := r.PathPrefix("/ws").Subrouter()
 		ws.HandleFunc("/chat", chatH.WSChat).Methods(http.MethodGet)
+	}
+
+	// ── SPA static file serving ─────────────────────────────────────────────
+	// Serve the built web-client from the same origin as the API.
+	// This eliminates the Vite proxy layer entirely and makes cookies and SSE
+	// work correctly in development without CORS issues.
+	// ── SPA fallback (catch-all) ────────────────────────────────────────────
+	// Must be LAST so API routes always take priority.
+	// Falls back to index.html for any path without a file extension
+	// (supports client-side routing: /, /login, /project/:id, etc.)
+	webDist := os.Getenv("WEB_DIST")
+	if webDist != "" {
+		r.PathPrefix("/").Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			clean := filepath.Clean(r.URL.Path)
+			// Serve real files as-is (assets, fonts, favicon, etc.)
+			if !strings.Contains(clean, ".") == false {
+				// Path has an extension — try to serve as static file
+				info, err := os.Stat(webDist + clean)
+				if err == nil && !info.IsDir() {
+					http.ServeFile(w, r, webDist+clean)
+					return
+				}
+			}
+			// SPA fallback: index.html for client-side routing
+			http.ServeFile(w, r, webDist+"/index.html")
+		}))
+		log.Println("[SPA] serving built frontend from:", webDist, "at / (fallback)")
 	}
 
 	// ── Server ───────────────────────────────────────────────────────────────

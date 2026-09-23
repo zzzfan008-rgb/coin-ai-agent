@@ -105,6 +105,12 @@ export const SKILL_CATALOG: SkillInfo[] = [
     description: '基于关键词生成款式创意、提供款式变体、分析流行趋势',
     tags: ['style', 'inspiration'],
   },
+  {
+    id: 'dreamina-cli',
+    name: 'AI 生图',
+    description: '文生图 / 图生图，调用即梦 AI 生成服装设计图、电商主图、场景图',
+    tags: ['image', 'dreamina', '生图'],
+  },
 ]
 
 // ── Token 管理 ──────────────────────────────────────────────────────────────
@@ -155,7 +161,11 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     ...init,
     credentials: 'include', // always send cookies (including the httpOnly auth cookie)
-    headers: init.body ? { 'Content-Type': 'application/json', ...init.headers } : init.headers,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+      ...init.headers,
+    },
   })
   if (!res.ok) throw await readError(res)
   if (res.status === 204) return undefined as T
@@ -368,6 +378,7 @@ export interface KnowledgeDocument {
   error: string | null
   created_at: string
   updated_at: string
+  description: string
 }
 
 export const KNOWLEDGE_ALLOWED_EXT = ['pdf', 'docx', 'txt', 'md']
@@ -388,6 +399,7 @@ export async function uploadKnowledgeDocument(file: File): Promise<KnowledgeDocu
   const res = await fetch('/api/knowledge/documents', {
     method: 'POST',
     credentials: 'include', // send httpOnly cookie
+    headers: { 'X-Requested-With': 'XMLHttpRequest' },
     body: form,
   })
   if (!res.ok) throw await readError(res)
@@ -397,6 +409,18 @@ export async function uploadKnowledgeDocument(file: File): Promise<KnowledgeDocu
 /** 删除文档（软删除，同时清理向量库） */
 export async function deleteKnowledgeDocument(id: string): Promise<void> {
   await apiFetch(`/api/knowledge/documents/${id}`, { method: 'DELETE' })
+}
+
+/** 修改文档描述 */
+export async function updateKnowledgeDocument(
+  id: string,
+  patch: { description?: string; filename?: string },
+): Promise<KnowledgeDocument> {
+  const res = await apiFetch(`/api/knowledge/documents/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+  return res as KnowledgeDocument
 }
 
 // ── MCP Server 管理 (T-016 / F-06) ──────────────────────────────────────────
@@ -489,7 +513,12 @@ export async function streamChatCompletion(
     signal: params.signal,
   })
 
-  if (!res.ok) throw await readError(res)
+  console.log('[SSE] fetch completed:', res.status, res.statusText, 'CT:', res.headers.get('content-type'), 'body:', res.body !== null)
+  if (!res.ok) {
+    const err = await readError(res)
+    console.log('[SSE] non-ok fetch error:', err)
+    throw err
+  }
   if (!res.body) throw new Error('浏览器不支持流式响应（ReadableStream）')
 
   const reader = res.body.getReader()
@@ -529,4 +558,35 @@ export async function streamChatCompletion(
   if (buffer.trim()) handleEvent(buffer)
 
   return full
+}
+
+/** Non-streaming: waits for the full response, returns complete text. */
+export async function chatCompletion(
+  params: StreamChatParams,
+): Promise<string> {
+  const res = await fetch('/v1/chat/completions', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: params.model ?? 'fashion-ai-default',
+      messages: params.messages,
+      stream: false,
+      extra_body: {
+        session_id: params.sessionId ?? null,
+        skill_ids: params.skillIds ?? [],
+        mcp_server_ids: [],
+        knowledge_collections: [],
+      },
+    }),
+    signal: params.signal,
+  })
+
+  if (!res.ok) {
+    const err = await readError(res)
+    throw err
+  }
+
+  const data = await res.json()
+  return data?.choices?.[0]?.message?.content ?? ''
 }

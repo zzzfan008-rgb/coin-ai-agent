@@ -22,7 +22,7 @@ function StreamingHint() {
   const [idx, setIdx] = useState(0)
 
   useEffect(() => {
-    const t = setInterval(() => setIdx((i) => (i + 1) % WAIT_HINTS.length), 2600)
+    const t = setInterval(() => setIdx((i) => (i + 1) % WAIT_HINTS.length), 5200)
     return () => clearInterval(t)
   }, [])
 
