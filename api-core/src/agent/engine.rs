@@ -39,9 +39,9 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            max_turns: 5,
+            max_turns: 30,
             temperature: Some(0.7),
-            max_tokens: Some(4096),
+            max_tokens: Some(32768),
         }
     }
 }

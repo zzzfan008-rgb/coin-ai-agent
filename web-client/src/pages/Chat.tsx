@@ -31,6 +31,13 @@ export default function Chat() {
   const chat = useChat(params.id)
   const [skillPanelOpen, setSkillPanelOpen] = useState(false)
   const [addToProjectOpen, setAddToProjectOpen] = useState(false)
+  const [inputValue, setInputValue] = useState(() => sessionStorage.getItem('draft_input') || '')
+
+  // ── 持久化输入框内容（刷新后恢复） ────────────────────────────────
+  const handleInputChange = (v: string) => {
+    setInputValue(v)
+    sessionStorage.setItem('draft_input', v)
+  }
 
   // 以图搜图面板状态
   const [similarPanel, setSimilarPanel] = useState<{
@@ -76,6 +83,8 @@ export default function Chat() {
   const error = chat.error
 
   const handleSend = (text: string, images: File[]) => {
+    sessionStorage.removeItem('draft_input')
+    setInputValue('')
     if (images.length > 0) {
       // 以图搜图（以第一张图为查询；附带文字也作为普通消息发送）
       const file = images[0]
@@ -232,6 +241,8 @@ export default function Chat() {
         onStop={chat.stopStreaming}
         isStreaming={chat.isStreaming}
         disabled={!chat.loaded || !chat.currentSession}
+        initialValue={inputValue}
+        onChange={handleInputChange}
       />
       </div>
 

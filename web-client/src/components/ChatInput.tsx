@@ -6,6 +6,8 @@ interface ChatInputProps {
   onStop: () => void
   isStreaming: boolean
   disabled?: boolean
+  initialValue?: string
+  onChange?: (value: string) => void
 }
 
 export function ChatInput({
@@ -13,8 +15,10 @@ export function ChatInput({
   onStop,
   isStreaming,
   disabled,
+  initialValue = '',
+  onChange,
 }: ChatInputProps) {
-  const [value, setValue] = useState('')
+  const [value, setValue] = useState(initialValue)
   const [images, setImages] = useState<File[]>([])
   const [dragging, setDragging] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -129,7 +133,10 @@ export function ChatInput({
             ref={textareaRef}
             rows={1}
             value={value}
-            onChange={(e) => setValue(e.target.value)}
+            onChange={(e) => {
+              setValue(e.target.value)
+              onChange?.(e.target.value)
+            }}
             onKeyDown={handleKeyDown}
             disabled={disabled}
             placeholder={
