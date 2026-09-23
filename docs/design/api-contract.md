@@ -9,13 +9,35 @@
 
 ### 1.1 JWT 认证
 
-所有需要认证的接口，在请求头中携带：
+所有需要认证的接口，支持两种认证方式：
+
+**方式一：Bearer Token（推荐用于 API 消费者）**
 
 ```
-Authorization: Bearer <jwt_token>
+Authorization: Bearer ***
 ```
 
-JWT Claims 结构：
+**方式二：HttpOnly Cookie（Web 前端默认）**
+
+登录成功后，服务器通过 `Set-Cookie` 设置 HttpOnly Cookie，前端 JS 无法访问，防 XSS 窃取。
+
+Cookie 策略：`HttpOnly; SameSite=Lax; Secure`（生产环境需 HTTPS）
+
+### 1.2 认证优先级
+
+网关鉴权中间件优先检查 Cookie，Cookie 不存在或无效时回退检查 Authorization Bearer。
+
+> **注意**：OpenAI 兼容接口 `/v1/chat/completions` 继续只接受 Bearer Token，不接受 Cookie（API 消费者场景）。
+
+### 1.3 登出
+
+```
+POST /auth/logout
+```
+
+清除 HttpOnly Cookie。响应：`200 OK`（无 Body）。
+
+### 1.4 JWT Claims 结构
 
 ```json
 {
@@ -28,9 +50,7 @@ JWT Claims 结构：
 }
 ```
 
-### 1.2 错误响应格式
-
-所有错误返回统一格式：
+### 1.5 错误响应格式
 
 ```json
 {

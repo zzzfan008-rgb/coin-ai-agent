@@ -17,7 +17,6 @@ mod api;
 mod llm;
 mod agent;
 mod tool;
-mod skill;
 mod skill_engine;
 mod mcp;
 mod rag;

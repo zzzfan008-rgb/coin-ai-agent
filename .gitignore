@@ -129,3 +129,4 @@ qdrant-data/
 .cache/
 tmp/
 temp/
+uploads/

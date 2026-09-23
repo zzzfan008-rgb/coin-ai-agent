@@ -889,6 +889,11 @@ pub async fn upload_knowledge_document(
                     .bytes()
                     .await
                     .map_err(|e| crate::error::AppError::BadRequest(format!("Read file: {e}")))?;
+                if data.len() > 50 * 1024 * 1024 {
+                    return Err(crate::error::AppError::BadRequest(
+                        "File exceeds 50MB limit".into(),
+                    ));
+                }
                 file_bytes = data.to_vec();
             }
             "org_id" => org_id_raw = field.text().await.unwrap_or_default(),
@@ -1279,6 +1284,11 @@ pub async fn find_similar_images(
                                 crate::error::AppError::BadRequest(format!("Read file: {e}"))
                             })?
                             .to_vec();
+                        if file_bytes.len() > 10 * 1024 * 1024 {
+                            return Err(crate::error::AppError::BadRequest(
+                                "Image exceeds 10MB limit".into(),
+                            ));
+                        }
                     }
                     "org_id" => org = field.text().await.unwrap_or_default(),
                     "dept_id" => dept = field.text().await.unwrap_or_default(),
@@ -1411,6 +1421,11 @@ pub async fn upload_style_image(
                     .await
                     .map_err(|e| crate::error::AppError::BadRequest(format!("Read file: {e}")))?
                     .to_vec();
+                if file_bytes.len() > 10 * 1024 * 1024 {
+                    return Err(crate::error::AppError::BadRequest(
+                        "Image exceeds 10MB limit".into(),
+                    ));
+                }
             }
             "uploaded_by" => {
                 // Only honour a form-supplied uploader when no gateway header.
