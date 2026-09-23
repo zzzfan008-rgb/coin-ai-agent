@@ -1,0 +1,1221 @@
+{
+  "summary": {
+    "total": 82,
+    "correct": 33,
+    "accuracy": 0.4024,
+    "model": "openai/clip-vit-base-patch32",
+    "device": "cpu"
+  },
+  "by_category": {
+    "T恤": {
+      "total": 55,
+      "correct": 17,
+      "accuracy": 0.3091
+    },
+    "针织上衣": {
+      "total": 12,
+      "correct": 10,
+      "accuracy": 0.8333
+    },
+    "长袖T恤": {
+      "total": 8,
+      "correct": 3,
+      "accuracy": 0.375
+    },
+    "衬衫": {
+      "total": 3,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "polo衫": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "连帽T恤": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "卫衣": {
+      "total": 1,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "开衫": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    }
+  },
+  "by_style": {
+    "休闲": {
+      "total": 30,
+      "correct": 10,
+      "accuracy": 0.3333
+    },
+    "休闲通勤": {
+      "total": 23,
+      "correct": 16,
+      "accuracy": 0.6957
+    },
+    "休闲街头": {
+      "total": 11,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "温柔通勤": {
+      "total": 4,
+      "correct": 1,
+      "accuracy": 0.25
+    },
+    "休闲温柔": {
+      "total": 4,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "休闲户外": {
+      "total": 3,
+      "correct": 1,
+      "accuracy": 0.3333
+    },
+    "休闲运动": {
+      "total": 2,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "休闲可爱": {
+      "total": 2,
+      "correct": 2,
+      "accuracy": 1.0
+    },
+    "休闲性感": {
+      "total": 2,
+      "correct": 2,
+      "accuracy": 1.0
+    },
+    "温柔休闲": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    }
+  },
+  "by_color": {
+    "白色": {
+      "total": 33,
+      "correct": 8,
+      "accuracy": 0.2424
+    },
+    "黑色": {
+      "total": 10,
+      "correct": 7,
+      "accuracy": 0.7
+    },
+    "灰色": {
+      "total": 9,
+      "correct": 6,
+      "accuracy": 0.6667
+    },
+    "米白": {
+      "total": 5,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "杏色": {
+      "total": 4,
+      "correct": 2,
+      "accuracy": 0.5
+    },
+    "浅蓝": {
+      "total": 3,
+      "correct": 3,
+      "accuracy": 1.0
+    },
+    "浅绿": {
+      "total": 2,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "深灰": {
+      "total": 2,
+      "correct": 1,
+      "accuracy": 0.5
+    },
+    "藏青": {
+      "total": 2,
+      "correct": 2,
+      "accuracy": 1.0
+    },
+    "燕麦": {
+      "total": 2,
+      "correct": 1,
+      "accuracy": 0.5
+    },
+    "薄荷绿": {
+      "total": 1,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "蓝色": {
+      "total": 1,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "酒红": {
+      "total": 1,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "军绿": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "米色": {
+      "total": 1,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "橙色": {
+      "total": 1,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "咖啡": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "灰棕条纹": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "米白条纹": {
+      "total": 1,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "粉色": {
+      "total": 1,
+      "correct": 0,
+      "accuracy": 0.0
+    }
+  },
+  "wrong_samples": [
+    {
+      "image": "imgi_76_O1CN01Vz0DkZ27QKs29q7F8~crop,0,169,2161,2881~_!!1878777791.jpg_580x580q90.jpg",
+      "text": "米白棉质V领宽松T恤",
+      "hard_negative": "黑色修身V领针织衫",
+      "category": "T恤",
+      "color": "米白",
+      "style": "休闲温柔",
+      "text_score": 0.18,
+      "hard_negative_score": 0.2346,
+      "correct": false
+    },
+    {
+      "image": "imgi_30_O1CN01NN8dlqGh9YL2vHAO_!!4611686018427384882-0-item_pic.jpg_460x460q90.jpg_.webp",
+      "text": "米白棉质圆领宽松T恤",
+      "hard_negative": "黑色修身半高领上衣",
+      "category": "T恤",
+      "color": "米白",
+      "style": "休闲户外",
+      "text_score": 0.2185,
+      "hard_negative_score": 0.2591,
+      "correct": false
+    },
+    {
+      "image": "imgi_52_O1CN01jCyqBv21gvYVRxUAj_!!2215571067015.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领宽松印花长袖T恤",
+      "hard_negative": "灰色修身polo衫",
+      "category": "长袖T恤",
+      "color": "白色",
+      "style": "休闲街头",
+      "text_score": 0.1777,
+      "hard_negative_score": 0.2141,
+      "correct": false
+    },
+    {
+      "image": "imgi_58_O1CN010KINR62JMSpVWSM5c_!!2207438149407.jpg_580x580q90.jpg",
+      "text": "米白棉质圆领修身T恤",
+      "hard_negative": "灰色宽松polo衫",
+      "category": "T恤",
+      "color": "米白",
+      "style": "休闲通勤",
+      "text_score": 0.1792,
+      "hard_negative_score": 0.2134,
+      "correct": false
+    },
+    {
+      "image": "imgi_62_O1CN01Irp0x2i6jMK2vHAO_!!150741798.jpg_580x580q90.jpg",
+      "text": "白色雪纺V领宽松衬衫",
+      "hard_negative": "黑色修身V领针织衫",
+      "category": "衬衫",
+      "color": "白色",
+      "style": "温柔通勤",
+      "text_score": 0.2076,
+      "hard_negative_score": 0.2372,
+      "correct": false
+    },
+    {
+      "image": "imgi_21_O1CN01WHXcnW26NIXFpskSN_!!2214809757649.jpg_460x460q90.jpg_.webp",
+      "text": "薄荷绿棉质印花宽松T恤",
+      "hard_negative": "白色修身衬衫",
+      "category": "T恤",
+      "color": "薄荷绿",
+      "style": "休闲",
+      "text_score": 0.2105,
+      "hard_negative_score": 0.2381,
+      "correct": false
+    },
+    {
+      "image": "imgi_67_O1CN01wDqV871ZOKDssbzSD_!!862293184.jpg_580x580q90.jpg",
+      "text": "粉色棉质圆领宽松T恤",
+      "hard_negative": "白色修身衬衫",
+      "category": "T恤",
+      "color": "粉色",
+      "style": "休闲温柔",
+      "text_score": 0.2192,
+      "hard_negative_score": 0.2459,
+      "correct": false
+    },
+    {
+      "image": "imgi_34_O1CN01bsu2An2ELwHUf0V2J_!!2012418729.jpg_460x460q90.jpg_.webp",
+      "text": "白色棉质圆领修身T恤",
+      "hard_negative": "黑色宽松印花卫衣",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲通勤",
+      "text_score": 0.2113,
+      "hard_negative_score": 0.2366,
+      "correct": false
+    },
+    {
+      "image": "imgi_33_O1CN01850eErSsHuB1WPjS_!!76223406-0-picasso.jpg_460x460q90.jpg_.webp",
+      "text": "白色棉质圆领宽松T恤",
+      "hard_negative": "黑色修身V领针织衫",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲",
+      "text_score": 0.2153,
+      "hard_negative_score": 0.2355,
+      "correct": false
+    },
+    {
+      "image": "imgi_47_O1CN01Y5LzEX1kHQ1K70a94_!!378884658.jpg_580x580q90.jpg",
+      "text": "白色雪纺垂坠宽松衬衫",
+      "hard_negative": "黑色修身半高领上衣",
+      "category": "衬衫",
+      "color": "白色",
+      "style": "温柔通勤",
+      "text_score": 0.1673,
+      "hard_negative_score": 0.1869,
+      "correct": false
+    }
+  ],
+  "records": [
+    {
+      "image": "imgi_21_O1CN01WHXcnW26NIXFpskSN_!!2214809757649.jpg_460x460q90.jpg_.webp",
+      "text": "薄荷绿棉质印花宽松T恤",
+      "hard_negative": "白色修身衬衫",
+      "category": "T恤",
+      "color": "薄荷绿",
+      "style": "休闲",
+      "text_score": 0.2105,
+      "hard_negative_score": 0.2381,
+      "correct": false
+    },
+    {
+      "image": "imgi_21_O1CN01rEvczW1npG7d6SjHV_!!4611686018427385874-0-item_pic.jpg_580x580q90.jpg",
+      "text": "蓝色棉质圆领宽松T恤",
+      "hard_negative": "白色修身针织衫",
+      "category": "T恤",
+      "color": "蓝色",
+      "style": "休闲",
+      "text_score": 0.2014,
+      "hard_negative_score": 0.2183,
+      "correct": false
+    },
+    {
+      "image": "imgi_25_O1CN01XrXX1t1Kq3wwhux36_!!2202436291214.jpg_580x580q90.jpg",
+      "text": "黑色棉质V领修身T恤",
+      "hard_negative": "白色宽松圆领T恤",
+      "category": "T恤",
+      "color": "黑色",
+      "style": "休闲通勤",
+      "text_score": 0.2377,
+      "hard_negative_score": 0.2258,
+      "correct": true
+    },
+    {
+      "image": "imgi_26_O1CN01BmCS8OFgheL1WPjS_!!76223406-0-picasso.jpg_460x460q90.jpg_.webp",
+      "text": "白色棉质V领宽松T恤",
+      "hard_negative": "黑色修身半高领上衣",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲",
+      "text_score": 0.2415,
+      "hard_negative_score": 0.2317,
+      "correct": true
+    },
+    {
+      "image": "imgi_27_O1CN01YVi35C213zZZDqLeO_!!868616930.jpg_460x460q90.jpg_.webp",
+      "text": "白色棉质圆领宽松T恤",
+      "hard_negative": "黑色修身V领T恤",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲",
+      "text_score": 0.2055,
+      "hard_negative_score": 0.1987,
+      "correct": true
+    },
+    {
+      "image": "imgi_27_O1CN01dyzSVe3pmtC1pITk_!!676716255.jpg_580x580q90.jpg",
+      "text": "白色棉质V领修身T恤",
+      "hard_negative": "灰色宽松polo衫",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲",
+      "text_score": 0.2199,
+      "hard_negative_score": 0.2231,
+      "correct": false
+    },
+    {
+      "image": "imgi_28_O1CN01qzKprcs4JBI2vHAO_!!2215903283376-0-picasso.jpg_460x460q90.jpg_.webp",
+      "text": "白色棉质圆领修身长袖T恤",
+      "hard_negative": "黑色宽松连帽卫衣",
+      "category": "长袖T恤",
+      "color": "白色",
+      "style": "休闲通勤",
+      "text_score": 0.2297,
+      "hard_negative_score": 0.2329,
+      "correct": false
+    },
+    {
+      "image": "imgi_29_O1CN01vv9A8m1Kq3tJt4hM7_!!2202436291214.jpg_580x580q90.jpg",
+      "text": "杏色棉质圆领修身T恤",
+      "hard_negative": "白色宽松V领T恤",
+      "category": "T恤",
+      "color": "杏色",
+      "style": "休闲",
+      "text_score": 0.2349,
+      "hard_negative_score": 0.2058,
+      "correct": true
+    },
+    {
+      "image": "imgi_30_O1CN01NN8dlqGh9YL2vHAO_!!4611686018427384882-0-item_pic.jpg_460x460q90.jpg_.webp",
+      "text": "米白棉质圆领宽松T恤",
+      "hard_negative": "黑色修身半高领上衣",
+      "category": "T恤",
+      "color": "米白",
+      "style": "休闲户外",
+      "text_score": 0.2185,
+      "hard_negative_score": 0.2591,
+      "correct": false
+    },
+    {
+      "image": "imgi_30_O1CN01VpKhCV1UEdhJRQQPS_!!434472486.jpg_580x580q90.jpg",
+      "text": "灰色棉质翻领修身polo衫",
+      "hard_negative": "白色圆领印花T恤",
+      "category": "polo衫",
+      "color": "灰色",
+      "style": "休闲通勤",
+      "text_score": 0.2043,
+      "hard_negative_score": 0.1697,
+      "correct": true
+    },
+    {
+      "image": "imgi_31_O1CN01FxPEby1kPf53yC23V~crop,180,0,1080,1440~_!!829674676.jpg_460x460q90.jpg_.webp",
+      "text": "黑色针织半高领修身针织上衣",
+      "hard_negative": "白色宽松V领T恤",
+      "category": "针织上衣",
+      "color": "黑色",
+      "style": "休闲通勤",
+      "text_score": 0.2178,
+      "hard_negative_score": 0.194,
+      "correct": true
+    },
+    {
+      "image": "imgi_31_O1CN01Ygfr4h2AX9dpTc1r4_!!289268212.jpg_580x580q90.jpg",
+      "text": "浅绿棉质圆领宽松印花T恤",
+      "hard_negative": "白色修身衬衫",
+      "category": "T恤",
+      "color": "浅绿",
+      "style": "休闲",
+      "text_score": 0.2246,
+      "hard_negative_score": 0.2356,
+      "correct": false
+    },
+    {
+      "image": "imgi_32_O1CN01oq6Er329O9zXNBctP_!!2110098057.jpg_460x460q90.jpg_.webp",
+      "text": "深灰针织圆领修身针织上衣",
+      "hard_negative": "米色宽松圆领T恤",
+      "category": "针织上衣",
+      "color": "深灰",
+      "style": "休闲通勤",
+      "text_score": 0.2135,
+      "hard_negative_score": 0.1921,
+      "correct": true
+    },
+    {
+      "image": "imgi_33_O1CN01850eErSsHuB1WPjS_!!76223406-0-picasso.jpg_460x460q90.jpg_.webp",
+      "text": "白色棉质圆领宽松T恤",
+      "hard_negative": "黑色修身V领针织衫",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲",
+      "text_score": 0.2153,
+      "hard_negative_score": 0.2355,
+      "correct": false
+    },
+    {
+      "image": "imgi_33_O1CN01wLXKWq2CD7XFiREey_!!4611686018427385303-0-item_pic.jpg_580x580q90.jpg",
+      "text": "白色棉质连帽宽松连帽T恤",
+      "hard_negative": "黑色圆领修身T恤",
+      "category": "连帽T恤",
+      "color": "白色",
+      "style": "休闲",
+      "text_score": 0.2526,
+      "hard_negative_score": 0.2509,
+      "correct": true
+    },
+    {
+      "image": "imgi_34_O1CN01WF6PeX234Zb2Zf2D3_!!1629017202.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领宽松T恤",
+      "hard_negative": "灰色修身polo衫",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲",
+      "text_score": 0.2103,
+      "hard_negative_score": 0.2252,
+      "correct": false
+    },
+    {
+      "image": "imgi_34_O1CN01bsu2An2ELwHUf0V2J_!!2012418729.jpg_460x460q90.jpg_.webp",
+      "text": "白色棉质圆领修身T恤",
+      "hard_negative": "黑色宽松印花卫衣",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲通勤",
+      "text_score": 0.2113,
+      "hard_negative_score": 0.2366,
+      "correct": false
+    },
+    {
+      "image": "imgi_35_O1CN011xnY3O1d5mZ73PnTp_!!410623685.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领宽松印花T恤",
+      "hard_negative": "藏青修身V领T恤",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲",
+      "text_score": 0.1979,
+      "hard_negative_score": 0.2025,
+      "correct": false
+    },
+    {
+      "image": "imgi_35_O1CN01CVASYO23KbMvSvZsG_!!4611686018427382709-0-item_pic.jpg_580x580q90.jpg",
+      "text": "黑色棉质圆领宽松猫咪印花T恤",
+      "hard_negative": "白色修身衬衫",
+      "category": "T恤",
+      "color": "黑色",
+      "style": "休闲街头",
+      "text_score": 0.2396,
+      "hard_negative_score": 0.2519,
+      "correct": false
+    },
+    {
+      "image": "imgi_36_O1CN01C5ScPk1GwhEWjIgwI_!!4611686018427387615-0-item_pic.jpg_580x580q90.jpg",
+      "text": "酒红棉质圆领宽松印花T恤",
+      "hard_negative": "白色修身V领T恤",
+      "category": "T恤",
+      "color": "酒红",
+      "style": "休闲街头",
+      "text_score": 0.2075,
+      "hard_negative_score": 0.2138,
+      "correct": false
+    },
+    {
+      "image": "imgi_37_O1CN01AcLOns2J5WHIVimve~crop,99,0,600,800~_!!2785499370.jpg_580x580q90.jpg",
+      "text": "米白针织圆领修身针织上衣",
+      "hard_negative": "黑色宽松圆领T恤",
+      "category": "针织上衣",
+      "color": "米白",
+      "style": "温柔通勤",
+      "text_score": 0.1921,
+      "hard_negative_score": 0.197,
+      "correct": false
+    },
+    {
+      "image": "imgi_37_O1CN01OOhRVC1w3vkZlNO4m~crop,180,0,1080,1440~_!!1967766253.jpg_580x580q90.jpg",
+      "text": "白色棉质V领宽松刺绣T恤",
+      "hard_negative": "灰色修身半高领上衣",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲",
+      "text_score": 0.2188,
+      "hard_negative_score": 0.2316,
+      "correct": false
+    },
+    {
+      "image": "imgi_38_O1CN01eE125g1kPf4SfWlss~crop,180,0,1080,1440~_!!829674676.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领宽松T恤",
+      "hard_negative": "黑色修身V领针织衫",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲",
+      "text_score": 0.211,
+      "hard_negative_score": 0.2299,
+      "correct": false
+    },
+    {
+      "image": "imgi_38_O1CN01fnhnNM1ZOK2NWvOJs_!!862293184.jpg_580x580q90.jpg",
+      "text": "浅蓝棉质V领修身T恤",
+      "hard_negative": "白色宽松圆领T恤",
+      "category": "T恤",
+      "color": "浅蓝",
+      "style": "休闲",
+      "text_score": 0.2265,
+      "hard_negative_score": 0.2182,
+      "correct": true
+    },
+    {
+      "image": "imgi_39_O1CN01eYADpk1hKfyDFOvgB_!!4611686018427384227-0-item_pic.jpg_580x580q90.jpg",
+      "text": "黑色棉质V领修身T恤",
+      "hard_negative": "白色宽松圆领T恤",
+      "category": "T恤",
+      "color": "黑色",
+      "style": "休闲通勤",
+      "text_score": 0.2208,
+      "hard_negative_score": 0.2111,
+      "correct": true
+    },
+    {
+      "image": "imgi_39_O1CN01hXlDYFOliUF2vHAO_!!2218702111632-0-picasso.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领修身T恤",
+      "hard_negative": "黑色宽松印花T恤",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲",
+      "text_score": 0.2291,
+      "hard_negative_score": 0.2136,
+      "correct": true
+    },
+    {
+      "image": "imgi_40_O1CN01PuPabI2ELwM92JR2P_!!2012418729-0-yinheaigc.jpg_580x580q90.jpg",
+      "text": "黑色棉质V领修身T恤",
+      "hard_negative": "杏色宽松圆领T恤",
+      "category": "T恤",
+      "color": "黑色",
+      "style": "休闲通勤",
+      "text_score": 0.2023,
+      "hard_negative_score": 0.2062,
+      "correct": false
+    },
+    {
+      "image": "imgi_41_O1CN01VQtmjT1VAnwoxGnie_!!4611686018427380181-0-item_pic.jpg_580x580q90.jpg",
+      "text": "白色雪纺宽松垂坠衬衫",
+      "hard_negative": "黑色修身针织衫",
+      "category": "衬衫",
+      "color": "白色",
+      "style": "休闲通勤",
+      "text_score": 0.2261,
+      "hard_negative_score": 0.2403,
+      "correct": false
+    },
+    {
+      "image": "imgi_42_O1CN01QikV802AX9dh5wyoH_!!4611686018427380212-0-item_pic.jpg_580x580q90.jpg",
+      "text": "灰色棉质圆领宽松印花T恤",
+      "hard_negative": "白色修身V领T恤",
+      "category": "T恤",
+      "color": "灰色",
+      "style": "休闲",
+      "text_score": 0.2554,
+      "hard_negative_score": 0.2579,
+      "correct": false
+    },
+    {
+      "image": "imgi_43_O1CN01A4CqeBdFRWL1WPjS_!!76223406-0-picasso.jpg_580x580q90.jpg",
+      "text": "灰色棉质圆领宽松T恤",
+      "hard_negative": "白色修身衬衫",
+      "category": "T恤",
+      "color": "灰色",
+      "style": "休闲",
+      "text_score": 0.2535,
+      "hard_negative_score": 0.2594,
+      "correct": false
+    },
+    {
+      "image": "imgi_44_O1CN01TzOgDB1wEvEy60T66_!!802946277.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领宽松撞色边T恤",
+      "hard_negative": "黑色修身V领针织衫",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲运动",
+      "text_score": 0.2016,
+      "hard_negative_score": 0.2106,
+      "correct": false
+    },
+    {
+      "image": "imgi_44_O1CN01pYHV8Jb36eL2vHAO_!!2970038786-0-picasso.jpg_580x580q90.jpg",
+      "text": "深灰棉质圆领宽松印花卫衣",
+      "hard_negative": "白色修身衬衫",
+      "category": "卫衣",
+      "color": "深灰",
+      "style": "休闲街头",
+      "text_score": 0.2315,
+      "hard_negative_score": 0.2442,
+      "correct": false
+    },
+    {
+      "image": "imgi_45_O1CN01DsN9ZN1N77sxq2T4j_!!4009061522.jpg_580x580q90.jpg",
+      "text": "灰色棉质圆领修身T恤",
+      "hard_negative": "白色宽松V领T恤",
+      "category": "T恤",
+      "color": "灰色",
+      "style": "休闲",
+      "text_score": 0.2581,
+      "hard_negative_score": 0.2439,
+      "correct": true
+    },
+    {
+      "image": "imgi_46_O1CN014CRvOq1OrfnLeZm8b_!!3168351759.jpg_580x580q90.jpg",
+      "text": "灰色针织半高领修身针织上衣",
+      "hard_negative": "白色宽松圆领T恤",
+      "category": "针织上衣",
+      "color": "灰色",
+      "style": "休闲通勤",
+      "text_score": 0.2495,
+      "hard_negative_score": 0.2313,
+      "correct": true
+    },
+    {
+      "image": "imgi_46_O1CN01trag2qarB8G2vHAO_!!2215903283376-0-picasso.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领修身T恤",
+      "hard_negative": "黑色宽松印花T恤",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲通勤",
+      "text_score": 0.2505,
+      "hard_negative_score": 0.2464,
+      "correct": true
+    },
+    {
+      "image": "imgi_47_O1CN01Y5LzEX1kHQ1K70a94_!!378884658.jpg_580x580q90.jpg",
+      "text": "白色雪纺垂坠宽松衬衫",
+      "hard_negative": "黑色修身半高领上衣",
+      "category": "衬衫",
+      "color": "白色",
+      "style": "温柔通勤",
+      "text_score": 0.1673,
+      "hard_negative_score": 0.1869,
+      "correct": false
+    },
+    {
+      "image": "imgi_48_O1CN01k8itPH1kBSsXw4lix_!!653974645.jpg_580x580q90.jpg",
+      "text": "杏色棉质圆领宽松印花T恤",
+      "hard_negative": "白色修身衬衫",
+      "category": "T恤",
+      "color": "杏色",
+      "style": "休闲可爱",
+      "text_score": 0.2596,
+      "hard_negative_score": 0.2263,
+      "correct": true
+    },
+    {
+      "image": "imgi_49_O1CN014jUhprdMEJE2vHAO_!!1652864050-0-yinheaigc.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领修身长袖T恤",
+      "hard_negative": "黑色宽松连帽卫衣",
+      "category": "长袖T恤",
+      "color": "白色",
+      "style": "休闲通勤",
+      "text_score": 0.2487,
+      "hard_negative_score": 0.24,
+      "correct": true
+    },
+    {
+      "image": "imgi_49_O1CN01qCuNtp1MpitBblSVl_!!2221586441484.jpg_580x580q90.jpg",
+      "text": "黑色针织半高领修身针织上衣",
+      "hard_negative": "白色宽松V领T恤",
+      "category": "针织上衣",
+      "color": "黑色",
+      "style": "休闲通勤",
+      "text_score": 0.2077,
+      "hard_negative_score": 0.2039,
+      "correct": true
+    },
+    {
+      "image": "imgi_50_O1CN019YGDoN1wIaOGAwtEe_!!4611686018427386141-0-item_pic.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领宽松T恤",
+      "hard_negative": "灰色修身半高领上衣",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲",
+      "text_score": 0.2002,
+      "hard_negative_score": 0.2087,
+      "correct": false
+    },
+    {
+      "image": "imgi_50_O1CN01xv036W1Rx7M7imfBQ_!!2210506112177.jpg_580x580q90.jpg",
+      "text": "灰色棉质V领修身T恤",
+      "hard_negative": "白色宽松圆领T恤",
+      "category": "T恤",
+      "color": "灰色",
+      "style": "休闲通勤",
+      "text_score": 0.2473,
+      "hard_negative_score": 0.2348,
+      "correct": true
+    },
+    {
+      "image": "imgi_51_O1CN01J9IOrqBgbBF3VX04_!!2221593723423.jpg_580x580q90.jpg",
+      "text": "军绿针织圆领修身针织上衣",
+      "hard_negative": "米色宽松圆领T恤",
+      "category": "针织上衣",
+      "color": "军绿",
+      "style": "休闲通勤",
+      "text_score": 0.1844,
+      "hard_negative_score": 0.1749,
+      "correct": true
+    },
+    {
+      "image": "imgi_51_O1CN01ZEZHvD2MZhCyowUTv~crop,150,0,900,1200~_!!2212679249842.jpg_580x580q90.jpg",
+      "text": "米色棉质圆领宽松印花T恤",
+      "hard_negative": "白色修身V领T恤",
+      "category": "T恤",
+      "color": "米色",
+      "style": "休闲街头",
+      "text_score": 0.2215,
+      "hard_negative_score": 0.2264,
+      "correct": false
+    },
+    {
+      "image": "imgi_52_O1CN01M2cnRq281QxWWCiY7_!!4611686018427387856-0-item_pic.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领宽松T恤",
+      "hard_negative": "黑色修身半高领上衣",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲街头",
+      "text_score": 0.205,
+      "hard_negative_score": 0.218,
+      "correct": false
+    },
+    {
+      "image": "imgi_52_O1CN01jCyqBv21gvYVRxUAj_!!2215571067015.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领宽松印花长袖T恤",
+      "hard_negative": "灰色修身polo衫",
+      "category": "长袖T恤",
+      "color": "白色",
+      "style": "休闲街头",
+      "text_score": 0.1777,
+      "hard_negative_score": 0.2141,
+      "correct": false
+    },
+    {
+      "image": "imgi_53_O1CN01LkxxBu2ELwHsHxKds_!!2012418729.jpg_580x580q90.jpg",
+      "text": "黑色棉质V领修身T恤",
+      "hard_negative": "白色宽松圆领T恤",
+      "category": "T恤",
+      "color": "黑色",
+      "style": "休闲通勤",
+      "text_score": 0.2057,
+      "hard_negative_score": 0.2015,
+      "correct": true
+    },
+    {
+      "image": "imgi_53_O1CN01xBvwdDlw3MK2vHAO_!!2215250388160-0-picasso.jpg_580x580q90.jpg",
+      "text": "橙色棉质圆领修身T恤",
+      "hard_negative": "白色宽松V领T恤",
+      "category": "T恤",
+      "color": "橙色",
+      "style": "休闲运动",
+      "text_score": 0.1939,
+      "hard_negative_score": 0.1941,
+      "correct": false
+    },
+    {
+      "image": "imgi_55_O1CN01Nf46h71T2tx7CaVmu_!!2945652325-0-yinheaigc.jpg_580x580q90.jpg",
+      "text": "黑色棉质圆领修身T恤",
+      "hard_negative": "白色宽松印花T恤",
+      "category": "T恤",
+      "color": "黑色",
+      "style": "休闲街头",
+      "text_score": 0.2114,
+      "hard_negative_score": 0.2123,
+      "correct": false
+    },
+    {
+      "image": "imgi_55_O1CN01ayYNan1ZOK47YHbKH_!!862293184.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领宽松长袖T恤",
+      "hard_negative": "黑色修身V领针织衫",
+      "category": "长袖T恤",
+      "color": "白色",
+      "style": "休闲通勤",
+      "text_score": 0.2546,
+      "hard_negative_score": 0.2578,
+      "correct": false
+    },
+    {
+      "image": "imgi_56_O1CN01Kg5lwTOh7sH2vHAO_!!150741798.jpg_580x580q90.jpg",
+      "text": "藏青针织V领宽松开衫",
+      "hard_negative": "白色圆领修身T恤",
+      "category": "开衫",
+      "color": "藏青",
+      "style": "温柔通勤",
+      "text_score": 0.2539,
+      "hard_negative_score": 0.2365,
+      "correct": true
+    },
+    {
+      "image": "imgi_56_O1CN01UUSpqJ2AX9dSpshVJ_!!4611686018427380212-0-item_pic.jpg_580x580q90.jpg",
+      "text": "浅蓝棉质圆领修身T恤",
+      "hard_negative": "白色宽松V领T恤",
+      "category": "T恤",
+      "color": "浅蓝",
+      "style": "休闲",
+      "text_score": 0.2321,
+      "hard_negative_score": 0.2197,
+      "correct": true
+    },
+    {
+      "image": "imgi_57_O1CN01ZRfQyXxLd9F2vHAO_!!4611686018427384882-0-item_pic.jpg_580x580q90.jpg",
+      "text": "浅蓝棉质圆领修身长袖T恤",
+      "hard_negative": "黑色宽松圆领T恤",
+      "category": "长袖T恤",
+      "color": "浅蓝",
+      "style": "休闲户外",
+      "text_score": 0.2346,
+      "hard_negative_score": 0.2253,
+      "correct": true
+    },
+    {
+      "image": "imgi_58_O1CN010KINR62JMSpVWSM5c_!!2207438149407.jpg_580x580q90.jpg",
+      "text": "米白棉质圆领修身T恤",
+      "hard_negative": "灰色宽松polo衫",
+      "category": "T恤",
+      "color": "米白",
+      "style": "休闲通勤",
+      "text_score": 0.1792,
+      "hard_negative_score": 0.2134,
+      "correct": false
+    },
+    {
+      "image": "imgi_58_O1CN01EZ5EamAJygC1WPjS_!!2202436291214.jpg_580x580q90.jpg",
+      "text": "咖啡针织方领修身针织上衣",
+      "hard_negative": "白色宽松圆领T恤",
+      "category": "针织上衣",
+      "color": "咖啡",
+      "style": "休闲性感",
+      "text_score": 0.2562,
+      "hard_negative_score": 0.2466,
+      "correct": true
+    },
+    {
+      "image": "imgi_59_O1CN01AC8gjXPYtZK2vHAO_!!2215903283376-0-picasso.jpg_580x580q90.jpg",
+      "text": "灰色棉质圆领宽松T恤",
+      "hard_negative": "黑色修身V领针织衫",
+      "category": "T恤",
+      "color": "灰色",
+      "style": "休闲",
+      "text_score": 0.2406,
+      "hard_negative_score": 0.2581,
+      "correct": false
+    },
+    {
+      "image": "imgi_59_O1CN01fSX6Be1sKdiUDioSx_!!836115748.jpg_580x580q90.jpg",
+      "text": "灰棕条纹针织V领修身针织上衣",
+      "hard_negative": "白色宽松圆领T恤",
+      "category": "针织上衣",
+      "color": "灰棕条纹",
+      "style": "休闲通勤",
+      "text_score": 0.2334,
+      "hard_negative_score": 0.2145,
+      "correct": true
+    },
+    {
+      "image": "imgi_61_O1CN015XR76uIBoZH1pITk_!!2874232634.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领修身T恤",
+      "hard_negative": "黑色宽松印花卫衣",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲街头",
+      "text_score": 0.2591,
+      "hard_negative_score": 0.2732,
+      "correct": false
+    },
+    {
+      "image": "imgi_61_O1CN01ZDvjEu1VAo0ZyWHWN_!!4611686018427380181-0-item_pic.jpg_580x580q90.jpg",
+      "text": "米白条纹针织圆领宽松针织上衣",
+      "hard_negative": "黑色修身半高领上衣",
+      "category": "针织上衣",
+      "color": "米白条纹",
+      "style": "休闲",
+      "text_score": 0.2338,
+      "hard_negative_score": 0.2515,
+      "correct": false
+    },
+    {
+      "image": "imgi_62_O1CN01Irp0x2i6jMK2vHAO_!!150741798.jpg_580x580q90.jpg",
+      "text": "白色雪纺V领宽松衬衫",
+      "hard_negative": "黑色修身V领针织衫",
+      "category": "衬衫",
+      "color": "白色",
+      "style": "温柔通勤",
+      "text_score": 0.2076,
+      "hard_negative_score": 0.2372,
+      "correct": false
+    },
+    {
+      "image": "imgi_62_O1CN01jxfeLK1Yp3hLs6L3M_!!4611686018427380355-0-item_pic.jpg_580x580q90.jpg",
+      "text": "杏色棉质圆领宽松T恤",
+      "hard_negative": "白色修身衬衫",
+      "category": "T恤",
+      "color": "杏色",
+      "style": "休闲街头",
+      "text_score": 0.223,
+      "hard_negative_score": 0.2353,
+      "correct": false
+    },
+    {
+      "image": "imgi_63_O1CN017CLUyvoaSAG2vHAO_!!2215903283376-0-picasso.jpg_580x580q90.jpg",
+      "text": "黑色棉质圆领修身T恤",
+      "hard_negative": "白色宽松V领T恤",
+      "category": "T恤",
+      "color": "黑色",
+      "style": "休闲通勤",
+      "text_score": 0.2506,
+      "hard_negative_score": 0.2383,
+      "correct": true
+    },
+    {
+      "image": "imgi_64_O1CN01MM9WE2OOzmB1WPjS_!!840886988.jpg_580x580q90.jpg",
+      "text": "黑色针织半高领修身针织上衣",
+      "hard_negative": "白色宽松圆领T恤",
+      "category": "针织上衣",
+      "color": "黑色",
+      "style": "休闲性感",
+      "text_score": 0.2193,
+      "hard_negative_score": 0.2105,
+      "correct": true
+    },
+    {
+      "image": "imgi_64_O1CN01U2crrV1vkh5YB51GE_!!4611686018427380643-2-item_pic.png_580x580q90.jpg",
+      "text": "白色棉质圆领宽松T恤",
+      "hard_negative": "灰色修身半高领上衣",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲",
+      "text_score": 0.2331,
+      "hard_negative_score": 0.2493,
+      "correct": false
+    },
+    {
+      "image": "imgi_65_O1CN01VommPT1RCOrMin55c_!!4611686018427385451-0-item_pic.jpg_580x580q90.jpg",
+      "text": "米白棉质圆领宽松刺绣T恤",
+      "hard_negative": "黑色修身V领T恤",
+      "category": "T恤",
+      "color": "米白",
+      "style": "休闲",
+      "text_score": 0.2036,
+      "hard_negative_score": 0.2065,
+      "correct": false
+    },
+    {
+      "image": "imgi_66_O1CN01ATHBpq1Rx7MsHrC2F_!!2210506112177.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领宽松T恤",
+      "hard_negative": "黑色修身半高领上衣",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲街头",
+      "text_score": 0.2348,
+      "hard_negative_score": 0.244,
+      "correct": false
+    },
+    {
+      "image": "imgi_66_O1CN01s5gTlW1ZOJzzHfEcy_!!862293184.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领宽松T恤",
+      "hard_negative": "灰色修身polo衫",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲",
+      "text_score": 0.2205,
+      "hard_negative_score": 0.2358,
+      "correct": false
+    },
+    {
+      "image": "imgi_67_O1CN01wDqV871ZOKDssbzSD_!!862293184.jpg_580x580q90.jpg",
+      "text": "粉色棉质圆领宽松T恤",
+      "hard_negative": "白色修身衬衫",
+      "category": "T恤",
+      "color": "粉色",
+      "style": "休闲温柔",
+      "text_score": 0.2192,
+      "hard_negative_score": 0.2459,
+      "correct": false
+    },
+    {
+      "image": "imgi_68_O1CN01TZJr8G1Rx7O8H73oV_!!2210506112177.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领宽松叠穿条纹开衫T恤",
+      "hard_negative": "黑色修身半高领上衣",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲街头",
+      "text_score": 0.2271,
+      "hard_negative_score": 0.2333,
+      "correct": false
+    },
+    {
+      "image": "imgi_69_O1CN01CVRmVG24q2BSVsJuo_!!1724477441.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领修身T恤",
+      "hard_negative": "黑色宽松印花T恤",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲",
+      "text_score": 0.1964,
+      "hard_negative_score": 0.2006,
+      "correct": false
+    },
+    {
+      "image": "imgi_69_O1CN01n2NUE5FrPGH1WPjS_!!676716255.jpg_580x580q90.jpg",
+      "text": "灰色针织V领修身针织上衣",
+      "hard_negative": "白色宽松圆领T恤",
+      "category": "针织上衣",
+      "color": "灰色",
+      "style": "休闲通勤",
+      "text_score": 0.2302,
+      "hard_negative_score": 0.2092,
+      "correct": true
+    },
+    {
+      "image": "imgi_70_O1CN01CZ7smb1b9mtK5i5Od_!!2221593723423.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领修身苹果印花T恤",
+      "hard_negative": "黑色宽松V领T恤",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲可爱",
+      "text_score": 0.2459,
+      "hard_negative_score": 0.2326,
+      "correct": true
+    },
+    {
+      "image": "imgi_70_O1CN01y6Xmj01Kq3uR0dWB7_!!2202436291214.jpg_580x580q90.jpg",
+      "text": "藏青棉质圆领修身T恤",
+      "hard_negative": "白色宽松圆领T恤",
+      "category": "T恤",
+      "color": "藏青",
+      "style": "休闲",
+      "text_score": 0.2517,
+      "hard_negative_score": 0.2385,
+      "correct": true
+    },
+    {
+      "image": "imgi_71_O1CN015CApRV2ELwKxziH3x_!!2012418729.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领修身长袖T恤",
+      "hard_negative": "黑色宽松连帽卫衣",
+      "category": "长袖T恤",
+      "color": "白色",
+      "style": "休闲通勤",
+      "text_score": 0.2054,
+      "hard_negative_score": 0.2204,
+      "correct": false
+    },
+    {
+      "image": "imgi_71_O1CN01ekYmw91Rx7Mh1Eq5x_!!2210506112177.jpg_580x580q90.jpg",
+      "text": "燕麦针织V领修身针织上衣",
+      "hard_negative": "白色宽松圆领T恤",
+      "category": "针织上衣",
+      "color": "燕麦",
+      "style": "温柔休闲",
+      "text_score": 0.2624,
+      "hard_negative_score": 0.2355,
+      "correct": true
+    },
+    {
+      "image": "imgi_72_O1CN01Ewztxl1yegkewrJZD_!!4611686018427381484-0-item_pic.jpg_580x580q90.jpg",
+      "text": "燕麦棉质圆领宽松T恤",
+      "hard_negative": "黑色修身V领针织衫",
+      "category": "T恤",
+      "color": "燕麦",
+      "style": "休闲",
+      "text_score": 0.2584,
+      "hard_negative_score": 0.2702,
+      "correct": false
+    },
+    {
+      "image": "imgi_72_O1CN01Mwq7554dH4J2vHAO_!!2215903283376-0-picasso.jpg_580x580q90.jpg",
+      "text": "灰色棉质圆领修身T恤",
+      "hard_negative": "白色宽松V领T恤",
+      "category": "T恤",
+      "color": "灰色",
+      "style": "休闲通勤",
+      "text_score": 0.2469,
+      "hard_negative_score": 0.2278,
+      "correct": true
+    },
+    {
+      "image": "imgi_74_O1CN01EQUKMX1ZOJv3gH7k5_!!862293184.jpg_580x580q90.jpg",
+      "text": "杏色棉质V领宽松T恤",
+      "hard_negative": "白色修身衬衫",
+      "category": "T恤",
+      "color": "杏色",
+      "style": "休闲温柔",
+      "text_score": 0.2388,
+      "hard_negative_score": 0.2489,
+      "correct": false
+    },
+    {
+      "image": "imgi_74_O1CN01wKoOzOalOQH1WPjS_!!2456386471.jpg_580x580q90.jpg",
+      "text": "浅绿棉质圆领宽松T恤",
+      "hard_negative": "黑色修身半高领上衣",
+      "category": "T恤",
+      "color": "浅绿",
+      "style": "休闲户外",
+      "text_score": 0.2336,
+      "hard_negative_score": 0.2532,
+      "correct": false
+    },
+    {
+      "image": "imgi_75_O1CN01INJsJd2ELwHZbKcoB_!!2012418729.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领宽松T恤",
+      "hard_negative": "灰色修身polo衫",
+      "category": "T恤",
+      "color": "白色",
+      "style": "休闲",
+      "text_score": 0.2379,
+      "hard_negative_score": 0.2539,
+      "correct": false
+    },
+    {
+      "image": "imgi_75_O1CN01LmaUAb1ZOKCM2zrx4_!!862293184.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领修身长袖T恤",
+      "hard_negative": "黑色宽松印花T恤",
+      "category": "长袖T恤",
+      "color": "白色",
+      "style": "休闲",
+      "text_score": 0.2284,
+      "hard_negative_score": 0.2244,
+      "correct": true
+    },
+    {
+      "image": "imgi_76_O1CN01Vz0DkZ27QKs29q7F8~crop,0,169,2161,2881~_!!1878777791.jpg_580x580q90.jpg",
+      "text": "米白棉质V领宽松T恤",
+      "hard_negative": "黑色修身V领针织衫",
+      "category": "T恤",
+      "color": "米白",
+      "style": "休闲温柔",
+      "text_score": 0.18,
+      "hard_negative_score": 0.2346,
+      "correct": false
+    },
+    {
+      "image": "imgi_77_O1CN01vuqcdMyJ0YL32pSu_!!142722258.jpg_580x580q90.jpg",
+      "text": "白色棉质圆领修身长袖T恤",
+      "hard_negative": "灰色宽松polo衫",
+      "category": "长袖T恤",
+      "color": "白色",
+      "style": "休闲温柔",
+      "text_score": 0.2269,
+      "hard_negative_score": 0.2368,
+      "correct": false
+    }
+  ]
+}
