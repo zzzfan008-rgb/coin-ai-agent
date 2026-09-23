@@ -29,7 +29,7 @@ import (
 )
 
 func main() {
-	_ = godotenv.Load()
+	_ = godotenv.Load("api-gateway/.env")
 
 	cfg := config.Load()
 
@@ -251,21 +251,43 @@ func main() {
 
 		v1.HandleFunc("/models", chatH.Models).Methods(http.MethodGet)
 		v1.HandleFunc("/chat/completions", chatH.Completions).Methods(http.MethodPost)
+		v1.HandleFunc("/chat/upload-image",
+			func(w http.ResponseWriter, r *http.Request) {
+				coreProxy.ServeHTTP(w, r)
+			}).Methods(http.MethodPost)
 
 		// WebSocket (JWT via query param)
 		ws := r.PathPrefix("/ws").Subrouter()
 		ws.HandleFunc("/chat", chatH.WSChat).Methods(http.MethodGet)
 	}
 
-	// ── SPA static file serving ─────────────────────────────────────────────
+	// ── Shared: frontend dist path ────────────────────────────────────────────
+	webDist := os.Getenv("WEB_DIST")
+
+	// ── Uploads static file serving ────────────────────────────────────────────
+	// Serve uploaded chat images so the frontend can embed them in chat messages.
+	// Images are saved relative to the project root (where api-core runs from).
+	if webDist != "" {
+		uploadsDir := filepath.Join(filepath.Dir(webDist), "..", "uploads")
+		uploadsDir, _ = filepath.EvalSymlinks(uploadsDir)
+		if _, err := os.Stat(uploadsDir); err == nil {
+			r.PathPrefix("/uploads/").Handler(
+				http.StripPrefix("/uploads/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					http.ServeFile(w, r, uploadsDir+"/"+filepath.Clean(r.URL.Path))
+				})),
+			)
+			log.Println("[UPLOADS] serving uploads from:", uploadsDir, "at /uploads/")
+		}
+	}
+
+	// ── SPA static file serving ───────────────────────────────────────────────
 	// Serve the built web-client from the same origin as the API.
 	// This eliminates the Vite proxy layer entirely and makes cookies and SSE
 	// work correctly in development without CORS issues.
-	// ── SPA fallback (catch-all) ────────────────────────────────────────────
+	// ── SPA fallback (catch-all) ─────────────────────────────────────────────
 	// Must be LAST so API routes always take priority.
 	// Falls back to index.html for any path without a file extension
 	// (supports client-side routing: /, /login, /project/:id, etc.)
-	webDist := os.Getenv("WEB_DIST")
 	if webDist != "" {
 		r.PathPrefix("/").Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			clean := filepath.Clean(r.URL.Path)
@@ -284,7 +306,7 @@ func main() {
 		log.Println("[SPA] serving built frontend from:", webDist, "at / (fallback)")
 	}
 
-	// ── Server ───────────────────────────────────────────────────────────────
+	// ── Server ────────────────────────────────────────────────────────────────
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
 		Handler:      r,

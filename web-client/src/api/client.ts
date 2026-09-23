@@ -560,6 +560,21 @@ export async function streamChatCompletion(
   return full
 }
 
+/** Upload a single image for use in chat (e.g. dreamina image2image). */
+export async function uploadChatImage(file: File): Promise<string> {
+  const fd = new FormData()
+  fd.append('file', file)
+  const res = await fetch('/v1/chat/upload-image', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+    body: fd,
+  })
+  if (!res.ok) throw new Error(`upload-chat-image failed: ${res.status}`)
+  const data = await res.json()
+  return data.url as string
+}
+
 /** Non-streaming: waits for the full response, returns complete text. */
 export async function chatCompletion(
   params: StreamChatParams,

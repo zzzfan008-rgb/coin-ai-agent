@@ -1,18 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import {
-  Menu,
-  PanelRight,
-  AlertCircle,
-  FolderPlus,
-  RefreshCw,
-  WifiOff,
-} from 'lucide-react'
+import { Menu, PanelRight, AlertCircle, FolderPlus, RefreshCw, WifiOff } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useChat } from '../hooks/useChat'
 import { useLayout } from '../hooks/useLayout'
 import { SkillPanel } from '../components/SkillPanel'
 import { MessageBubble } from '../components/MessageBubble'
 import { ChatInput } from '../components/ChatInput'
+import { uploadChatImage } from '../api/client'
 import { AddToProjectsModal } from '../components/AddToProjectsModal'
 import { SimilarImagesPanel } from '../components/SimilarImagesPanel'
 import {
@@ -85,6 +79,7 @@ export default function Chat() {
   const handleSend = (text: string, images: File[]) => {
     sessionStorage.removeItem('draft_input')
     setInputValue('')
+
     if (images.length > 0) {
       // 以图搜图（以第一张图为查询；附带文字也作为普通消息发送）
       const file = images[0]
@@ -100,6 +95,7 @@ export default function Chat() {
           loading: false,
           error: '未登录，无法检索',
         })
+        void chat.sendMessage(text)
         return
       }
 
@@ -117,7 +113,18 @@ export default function Chat() {
         }
       })()
 
-      if (text) void chat.sendMessage(text)
+      // Upload images and append their URLs to the message text so the LLM
+      // can reference them (e.g. for dreamina image2image).
+      void (async () => {
+        try {
+          const urls = await Promise.all(images.map(f => uploadChatImage(f)))
+          const imageLines = urls.map(u => `[image: ${u}]`).join('\n')
+          void chat.sendMessage(text ? `${text}\n${imageLines}` : imageLines)
+        } catch (e) {
+          console.error('Image upload failed:', e)
+          void chat.sendMessage(text)
+        }
+      })()
     } else {
       void chat.sendMessage(text)
     }

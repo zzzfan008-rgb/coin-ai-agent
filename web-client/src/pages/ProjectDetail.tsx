@@ -41,6 +41,7 @@ export default function ProjectPage() {
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [adding, setAdding] = useState(false)
+  const sessions = detail?.sessions ?? []
 
   const reload = useCallback(async () => {
     try {
@@ -181,13 +182,13 @@ export default function ProjectPage() {
             <p className="mt-1 text-sm text-faint">暂无描述</p>
           )}
           <p className="mt-1 text-[11px] text-faint">
-            创建于 {formatTime(detail.created_at)} · {detail.sessions.length} 个会话
+            创建于 {formatTime(detail.created_at)} · {sessions.length} 个会话
           </p>
         </div>
 
         {/* 会话卡片 */}
         <div className="flex-1 overflow-y-auto px-6 py-5">
-          {detail.sessions.length === 0 ? (
+          {sessions.length === 0 ? (
             <div className="flex flex-col items-center justify-center pt-16 text-center">
               <MessageSquare size={28} className="text-faint" />
               <p className="mt-3 text-sm text-muted">项目中还没有会话</p>
@@ -203,7 +204,7 @@ export default function ProjectPage() {
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {detail.sessions.map((s) => (
+              {sessions.map((s) => (
                 <div
                   key={s.id}
                   className="group relative rounded-xl border border-border bg-surface p-4 transition-colors hover:border-primary/50"
@@ -258,7 +259,7 @@ export default function ProjectPage() {
       {adding && (
         <AddSessionsModal
           projectId={id}
-          existingSessionIds={detail.sessions.map((s) => s.id)}
+          existingSessionIds={sessions.map((s) => s.id)}
           onClose={() => setAdding(false)}
           onDone={() => {
             setAdding(false)

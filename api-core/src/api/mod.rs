@@ -22,6 +22,8 @@ pub fn routes() -> Router<AppState> {
             "/v1/chat/completions/stream",
             post(handlers::chat_stream),
         )
+        // Image upload for chat (e.g. dreamina image2image)
+        .route("/v1/chat/upload-image", post(handlers::upload_chat_image))
         // Sessions
         .route(
             "/internal/sessions",

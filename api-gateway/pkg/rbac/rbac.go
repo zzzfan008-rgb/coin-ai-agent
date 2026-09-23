@@ -74,6 +74,7 @@ m = r.role == p.role && pathMatch(r.path, p.path) && (p.method == "*" || r.metho
 		{"admin", "/api/*", "*"},
 		// Designer: chat + session CRUD
 		{"designer", "/v1/chat/completions", "POST"},
+		{"designer", "/v1/chat/upload-image", "POST"},
 		{"designer", "/v1/models", "GET"},
 		{"designer", "/ws/chat", "GET"},
 		{"designer", "/api/sessions", "GET"},

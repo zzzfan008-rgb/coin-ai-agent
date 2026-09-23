@@ -7,12 +7,31 @@
 //!
 //! The `SKILL_ENGINE` global must be initialised before this module is used.
 
+use std::path::PathBuf;
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::api::handlers::UserContext;
 use crate::error::{AppError, Result};
 use crate::skill_engine::{FASHION_STORE, FashionStore, SKILL_ENGINE, SkillMetadata};
+
+/// Resolve a chat-uploaded image path to an absolute filesystem path.
+///
+/// LLM receives images as `[image: /uploads/chat-images/{org}/{id}.ext]`.
+/// The CLI needs a real file path, so we join it against the project root.
+fn resolve_image_path(image_arg: &str) -> PathBuf {
+    if image_arg.starts_with('/') && !image_arg.starts_with("/uploads/") {
+        // Already an absolute path (e.g. `/Users/lionfan/...`) — use as-is
+        PathBuf::from(image_arg)
+    } else if image_arg.starts_with("/uploads/") {
+        // Relative to project root (where api-core runs from)
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(&image_arg[1..]) // strip leading '/'
+    } else {
+        PathBuf::from(image_arg)
+    }
+}
 use crate::skill_engine::color_theory;
 use tokio::process::Command;
 use tokio::time::{sleep, Duration};
@@ -183,6 +202,75 @@ pub async fn execute_skill(
     );
 
     let (org_id, dept_id) = parse_ctx_uuids(user_ctx)?;
+
+    // ── Helper: poll dreamina submit_id until done, return structured result ──────
+    async fn poll_dreamina(submit_id: &str) -> Result<Value> {
+        let max_attempts = 24;
+        for attempt in 1..=max_attempts {
+            tokio::time::sleep(tokio::time::Duration::from_secs(
+                if attempt <= 3 { 5 } else { 10 }
+            )).await;
+
+            let poll_out = match Command::new("dreamina")
+                .args(["query_result", "--submit_id", submit_id])
+                .output()
+                .await
+            {
+                Ok(o) => o,
+                Err(e) => {
+                    tracing::warn!("query_result failed: {e}");
+                    continue;
+                }
+            };
+
+            let poll_stdout = String::from_utf8_lossy(&poll_out.stdout);
+            let poll_json: serde_json::Value = match serde_json::from_str(poll_stdout.trim()) {
+                Ok(j) => j,
+                Err(_) => {
+                    tracing::warn!("Invalid JSON from query_result: {}", poll_stdout.trim());
+                    continue;
+                }
+            };
+
+            let status = poll_json.get("gen_status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+
+            tracing::info!(submit_id=%submit_id, status=%status, attempt=%attempt, "dreamina polling");
+
+            if status == "success" {
+                let images: Vec<String> = poll_json
+                    .get("result_json")
+                    .and_then(|r| r.get("images"))
+                    .and_then(|imgs| imgs.as_array())
+                    .map(|arr| {
+                        arr.iter().filter_map(|img| {
+                            img.get("image_url").and_then(|u| u.as_str()).map(|s| s.to_string())
+                        }).collect()
+                    })
+                    .unwrap_or_default();
+
+                return Ok(serde_json::json!({
+                    "status": "success",
+                    "submit_id": submit_id,
+                    "images": images,
+                    "message": "生成成功"
+                }));
+            } else if status == "fail" {
+                return Ok(serde_json::json!({
+                    "status": "fail",
+                    "submit_id": submit_id,
+                    "message": "生成失败"
+                }));
+            }
+        }
+
+        Ok(serde_json::json!({
+            "status": "timeout",
+            "submit_id": submit_id,
+            "message": "生成超时，请稍后手动查询结果"
+        }))
+    }
 
     // ── Real implementations per skill+tool ───────────────────────────────────
     let result = match (skill.id.as_str(), tool.name.as_str()) {
@@ -488,22 +576,89 @@ pub async fn execute_skill(
 
         ("dreamina-cli", "image2image") => {
             let prompt = arguments.get("prompt").and_then(|v| v.as_str()).unwrap_or("").trim();
-            let image_path = arguments.get("image_path").and_then(|v| v.as_str()).unwrap_or("").trim();
-            if prompt.is_empty() || image_path.is_empty() {
+            let image_path_arg = arguments.get("image_path").and_then(|v| v.as_str()).unwrap_or("").trim();
+            if prompt.is_empty() || image_path_arg.is_empty() {
                 return Err(AppError::BadRequest("prompt and image_path are required".into()));
             }
             let ratio = arguments.get("ratio").and_then(|v| v.as_str()).unwrap_or("1:1");
             let resolution = arguments.get("resolution_type").and_then(|v| v.as_str()).unwrap_or("2k");
+            let image_path = resolve_image_path(image_path_arg);
 
+            // Submit task
             let output = Command::new("dreamina")
-                .args(["image2image", "--prompt", prompt, "--images", image_path, "--ratio", ratio, "--resolution_type", resolution])
+                .args(["image2image", "--prompt", prompt, "--images", &image_path.to_string_lossy(), "--ratio", ratio, "--resolution_type", resolution])
                 .output()
                 .await
                 .map_err(|e| AppError::Internal(format!("dreamina CLI error: {e}")))?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+
+            // Parse submit_id
+            let submit_id = serde_json::from_str::<serde_json::Value>(stdout.trim())
+                .ok()
+                .and_then(|j| j.get("submit_id").and_then(|v| v.as_str().map(|s| s.to_string())))
+                .unwrap_or_default();
+
+            if submit_id.is_empty() {
+                return Err(AppError::Internal(format!("Failed to parse submit_id: {}", stdout.trim())));
+            }
+            tracing::info!(submit_id=%submit_id, "dreamina image2image submitted");
+
+            // Poll until success / fail / max_attempts
+            let max_attempts = 24;
+            for attempt in 1..=max_attempts {
+                tokio::time::sleep(tokio::time::Duration::from_secs(
+                    if attempt <= 3 { 5 } else { 10 }
+                )).await;
+
+                let poll_out = Command::new("dreamina")
+                    .args(["query_result", "--submit_id", &submit_id])
+                    .output()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("dreamina CLI error: {e}")))?;
+
+                let poll_stdout = String::from_utf8_lossy(&poll_out.stdout);
+                let poll_json: serde_json::Value = serde_json::from_str(poll_stdout.trim())
+                    .map_err(|e| AppError::Internal(format!("Invalid JSON from query_result: {e}")))?;
+
+                let status = poll_json.get("gen_status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+
+                tracing::info!(submit_id=%submit_id, status=%status, attempt=%attempt, "dreamina polling");
+
+                if status == "success" {
+                    let images: Vec<String> = poll_json
+                        .get("result_json")
+                        .and_then(|r| r.get("images"))
+                        .and_then(|imgs| imgs.as_array())
+                        .map(|arr| {
+                            arr.iter().filter_map(|img| {
+                                img.get("image_url").and_then(|u| u.as_str()).map(|s| s.to_string())
+                            }).collect()
+                        })
+                        .unwrap_or_default();
+
+                    if !images.is_empty() {
+                        return Ok(serde_json::json!({
+                            "status": "success",
+                            "submit_id": submit_id,
+                            "images": images,
+                            "message": "图片生成成功"
+                        }));
+                    }
+                } else if status == "fail" {
+                    return Ok(serde_json::json!({
+                        "status": "fail",
+                        "submit_id": submit_id,
+                        "message": "图片生成失败"
+                    }));
+                }
+            }
+
             serde_json::json!({
-                "stdout": String::from_utf8_lossy(&output.stdout).trim(),
-                "stderr": String::from_utf8_lossy(&output.stderr).trim(),
-                "exit_code": output.status.code(),
+                "status": "timeout",
+                "submit_id": submit_id,
+                "message": "生成超时，请稍后手动查询结果"
             })
         }
 
@@ -513,16 +668,22 @@ pub async fn execute_skill(
                 return Err(AppError::BadRequest("image_path is required".into()));
             }
             let resolution = arguments.get("resolution_type").and_then(|v| v.as_str()).unwrap_or("2k");
+            let image_path_owned = resolve_image_path(image_path);
             let output = Command::new("dreamina")
-                .args(["image_upscale", "--image", image_path, "--resolution_type", resolution])
+                .args(["image_upscale", "--image", &image_path_owned.to_string_lossy(), "--resolution_type", resolution])
                 .output()
                 .await
                 .map_err(|e| AppError::Internal(format!("dreamina CLI error: {e}")))?;
-            serde_json::json!({
-                "stdout": String::from_utf8_lossy(&output.stdout).trim(),
-                "stderr": String::from_utf8_lossy(&output.stderr).trim(),
-                "exit_code": output.status.code(),
-            })
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let submit_id = serde_json::from_str::<serde_json::Value>(stdout.trim())
+                .ok()
+                .and_then(|j| j.get("submit_id").and_then(|v| v.as_str().map(|s| s.to_string())))
+                .unwrap_or_default();
+            if submit_id.is_empty() {
+                return Err(AppError::Internal(format!("Failed to parse submit_id: {}", stdout.trim())));
+            }
+            tracing::info!(submit_id=%submit_id, "dreamina image_upscale submitted");
+            poll_dreamina(&submit_id).await?
         }
 
         ("dreamina-cli", "text2video") => {
@@ -531,52 +692,80 @@ pub async fn execute_skill(
                 return Err(AppError::BadRequest("prompt is required".into()));
             }
             let duration = arguments.get("duration").and_then(|v| v.as_i64()).unwrap_or(5);
-            // resolution_type is required for video commands
             let resolution = arguments.get("resolution_type").and_then(|v| v.as_str()).unwrap_or("720p");
             let duration_s = duration.to_string();
-            let mut args: Vec<&str> = vec!["text2video", "--prompt", prompt, "--duration", &duration_s, "--video_resolution", resolution];
+            let mut args: Vec<String> = vec![
+                "text2video".to_string(),
+                "--prompt".to_string(),
+                prompt.to_string(),
+                "--duration".to_string(),
+                duration_s.clone(),
+                "--video_resolution".to_string(),
+                resolution.to_string(),
+            ];
             if let Some(ratio) = arguments.get("ratio").and_then(|v| v.as_str()) {
                 if !ratio.is_empty() {
-                    args.push("--ratio");
-                    args.push(ratio);
+                    args.push("--ratio".to_string());
+                    args.push(ratio.to_string());
                 }
             }
-            let output = Command::new("dreamina").args(&args)
+            let output = Command::new("dreamina").args(args)
                 .output()
                 .await
                 .map_err(|e| AppError::Internal(format!("dreamina CLI error: {e}")))?;
-            serde_json::json!({
-                "stdout": String::from_utf8_lossy(&output.stdout).trim(),
-                "stderr": String::from_utf8_lossy(&output.stderr).trim(),
-                "exit_code": output.status.code(),
-            })
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let submit_id = serde_json::from_str::<serde_json::Value>(stdout.trim())
+                .ok()
+                .and_then(|j| j.get("submit_id").and_then(|v| v.as_str().map(|s| s.to_string())))
+                .unwrap_or_default();
+            if submit_id.is_empty() {
+                return Err(AppError::Internal(format!("Failed to parse submit_id: {}", stdout.trim())));
+            }
+            tracing::info!(submit_id=%submit_id, "dreamina text2video submitted");
+            poll_dreamina(&submit_id).await?
         }
 
         ("dreamina-cli", "image2video") => {
             let prompt = arguments.get("prompt").and_then(|v| v.as_str()).unwrap_or("").trim();
-            let image_path = arguments.get("image_path").and_then(|v| v.as_str()).unwrap_or("").trim();
-            if prompt.is_empty() || image_path.is_empty() {
+            let image_path_arg = arguments.get("image_path").and_then(|v| v.as_str()).unwrap_or("").trim();
+            if prompt.is_empty() || image_path_arg.is_empty() {
                 return Err(AppError::BadRequest("prompt and image_path are required".into()));
             }
             let duration = arguments.get("duration").and_then(|v| v.as_i64()).unwrap_or(5);
             let duration_s = duration.to_string();
+            let image_path_owned = resolve_image_path(image_path_arg);
             let res_default = "720p";
-            let mut args: Vec<&str> = vec!["image2video", "--prompt", prompt, "--image", image_path, "--duration", &duration_s, "--video_resolution", res_default];
+            let mut args: Vec<String> = vec![
+                "image2video".to_string(),
+                "--prompt".to_string(),
+                prompt.to_string(),
+                "--image".to_string(),
+                image_path_owned.to_string_lossy().to_string(),
+                "--duration".to_string(),
+                duration_s.clone(),
+                "--video_resolution".to_string(),
+                res_default.to_string(),
+            ];
             if let Some(res) = arguments.get("resolution_type").and_then(|v| v.as_str()) {
                 if !res.is_empty() {
-                    args.push("--video_resolution");
-                    args.push(res);
+                    args.push("--video_resolution".to_string());
+                    args.push(res.to_string());
                 }
             }
-            let output = Command::new("dreamina").args(&args)
+            let output = Command::new("dreamina").args(args)
                 .output()
                 .await
                 .map_err(|e| AppError::Internal(format!("dreamina CLI error: {e}")))?;
-            serde_json::json!({
-                "stdout": String::from_utf8_lossy(&output.stdout).trim(),
-                "stderr": String::from_utf8_lossy(&output.stderr).trim(),
-                "exit_code": output.status.code(),
-            })
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let submit_id = serde_json::from_str::<serde_json::Value>(stdout.trim())
+                .ok()
+                .and_then(|j| j.get("submit_id").and_then(|v| v.as_str().map(|s| s.to_string())))
+                .unwrap_or_default();
+            if submit_id.is_empty() {
+                return Err(AppError::Internal(format!("Failed to parse submit_id: {}", stdout.trim())));
+            }
+            tracing::info!(submit_id=%submit_id, "dreamina image2video submitted");
+            poll_dreamina(&submit_id).await?
         }
 
         ("dreamina-cli", "frames2video") => {
@@ -589,22 +778,41 @@ pub async fn execute_skill(
             let duration = arguments.get("duration").and_then(|v| v.as_i64()).unwrap_or(5);
             let duration_s = duration.to_string();
             let res_default = "720p";
-            let mut args: Vec<&str> = vec!["frames2video", "--prompt", prompt, "--first", first, "--last", last, "--duration", &duration_s, "--video_resolution", res_default];
+            let first_owned = resolve_image_path(first);
+            let last_owned = resolve_image_path(last);
+            let mut args: Vec<String> = vec![
+                "frames2video".to_string(),
+                "--prompt".to_string(),
+                prompt.to_string(),
+                "--first".to_string(),
+                first_owned.to_string_lossy().to_string(),
+                "--last".to_string(),
+                last_owned.to_string_lossy().to_string(),
+                "--duration".to_string(),
+                duration_s.clone(),
+                "--video_resolution".to_string(),
+                res_default.to_string(),
+            ];
             if let Some(ratio) = arguments.get("ratio").and_then(|v| v.as_str()) {
                 if !ratio.is_empty() {
-                    args.push("--ratio");
-                    args.push(ratio);
+                    args.push("--ratio".to_string());
+                    args.push(ratio.to_string());
                 }
             }
-            let output = Command::new("dreamina").args(&args)
+            let output = Command::new("dreamina").args(args)
                 .output()
                 .await
                 .map_err(|e| AppError::Internal(format!("dreamina CLI error: {e}")))?;
-            serde_json::json!({
-                "stdout": String::from_utf8_lossy(&output.stdout).trim(),
-                "stderr": String::from_utf8_lossy(&output.stderr).trim(),
-                "exit_code": output.status.code(),
-            })
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let submit_id = serde_json::from_str::<serde_json::Value>(stdout.trim())
+                .ok()
+                .and_then(|j| j.get("submit_id").and_then(|v| v.as_str().map(|s| s.to_string())))
+                .unwrap_or_default();
+            if submit_id.is_empty() {
+                return Err(AppError::Internal(format!("Failed to parse submit_id: {}", stdout.trim())));
+            }
+            tracing::info!(submit_id=%submit_id, "dreamina frames2video submitted");
+            poll_dreamina(&submit_id).await?
         }
 
         ("dreamina-cli", "multimodal2video") => {
@@ -613,39 +821,52 @@ pub async fn execute_skill(
             let duration_s = duration.to_string();
             let resolution = arguments.get("resolution_type").and_then(|v| v.as_str()).unwrap_or("720p");
 
-            let mut args: Vec<&str> = vec!["multimodal2video", "--duration", &duration_s, "--video_resolution", resolution];
+            let mut args: Vec<String> = vec![
+                "multimodal2video".to_string(),
+                "--duration".to_string(),
+                duration_s.clone(),
+                "--video_resolution".to_string(),
+                resolution.to_string(),
+            ];
             if !prompt.is_empty() {
-                args.push("--prompt");
-                args.push(prompt);
+                args.push("--prompt".to_string());
+                args.push(prompt.to_string());
             }
             // reference_paths: comma-separated; images → --image, videos → --video, audios → --audio
             if let Some(paths) = arguments.get("reference_paths").and_then(|v| v.as_str()) {
                 for p in paths.split(',') {
                     let p = p.trim();
                     if !p.is_empty() {
-                        let ext = p.rsplit('.').next().unwrap_or("").to_lowercase();
-                        if matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp") {
-                            args.push("--image");
+                        let resolved = resolve_image_path(p);
+                        let ext = resolved.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                        let (flag, _) = if matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp") {
+                            ("--image", "--image".to_string())
                         } else if matches!(ext.as_str(), "mp4" | "mov" | "avi" | "mkv" | "webm") {
-                            args.push("--video");
+                            ("--video", "--video".to_string())
                         } else if matches!(ext.as_str(), "mp3" | "wav" | "aac" | "flac" | "m4a") {
-                            args.push("--audio");
+                            ("--audio", "--audio".to_string())
                         } else {
-                            args.push("--image"); // default to image
-                        }
-                        args.push(p);
+                            ("--image", "--image".to_string())
+                        };
+                        args.push(flag.to_string());
+                        args.push(resolved.to_string_lossy().to_string());
                     }
                 }
             }
-            let output = Command::new("dreamina").args(&args)
+            let output = Command::new("dreamina").args(args)
                 .output()
                 .await
                 .map_err(|e| AppError::Internal(format!("dreamina CLI error: {e}")))?;
-            serde_json::json!({
-                "stdout": String::from_utf8_lossy(&output.stdout).trim(),
-                "stderr": String::from_utf8_lossy(&output.stderr).trim(),
-                "exit_code": output.status.code(),
-            })
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let submit_id = serde_json::from_str::<serde_json::Value>(stdout.trim())
+                .ok()
+                .and_then(|j| j.get("submit_id").and_then(|v| v.as_str().map(|s| s.to_string())))
+                .unwrap_or_default();
+            if submit_id.is_empty() {
+                return Err(AppError::Internal(format!("Failed to parse submit_id: {}", stdout.trim())));
+            }
+            tracing::info!(submit_id=%submit_id, "dreamina multimodal2video submitted");
+            poll_dreamina(&submit_id).await?
         }
 
         ("dreamina-cli", "multiframe2video") => {
@@ -663,70 +884,39 @@ pub async fn execute_skill(
                 return Err(AppError::BadRequest("image_paths must contain at least 2 images".into()));
             }
 
-            let mut args: Vec<&str> = vec![
-                "multiframe2video",
-                "--video_resolution", resolution,
-                "--duration", &duration_s,
+            let mut args: Vec<String> = vec![
+                "multiframe2video".to_string(),
+                "--video_resolution".to_string(),
+                resolution.to_string(),
+                "--duration".to_string(),
+                duration_s.clone(),
             ];
-            let image_refs: Vec<&str> = image_paths.iter().map(|&s| s).collect();
-            for path in &image_refs {
-                args.push("--images");
-                args.push(path);
+            for path in &image_paths {
+                let owned = resolve_image_path(path);
+                args.push("--images".to_string());
+                args.push(owned.to_string_lossy().to_string());
             }
             if !prompt.is_empty() {
-                args.push("--prompt");
-                args.push(prompt);
+                args.push("--prompt".to_string());
+                args.push(prompt.to_string());
             }
-            let output = Command::new("dreamina").args(&args)
+            let output = Command::new("dreamina").args(args)
                 .output()
                 .await
                 .map_err(|e| AppError::Internal(format!("dreamina CLI error: {e}")))?;
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let submit_id = if output.status.success() && !stdout.is_empty() {
+            let submit_id: Option<String> = if output.status.success() && !stdout.is_empty() {
                 serde_json::from_str::<serde_json::Value>(&stdout)
                     .ok()
-                    .and_then(|j| j.get("submit_id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                    .and_then(|j| j.get("submit_id").and_then(|v| v.as_str().map(|s| s.to_string())))
             } else {
                 None
             };
             if let Some(submit_id) = submit_id {
-                for _ in 0..5 {
-                    sleep(Duration::from_secs(5)).await;
-                    let q = Command::new("dreamina")
-                        .args(["query_result", "--submit_id", &submit_id])
-                        .output().await
-                        .map_err(|e| AppError::Internal(format!("query_result error: {e}")))?;
-                    let qout = String::from_utf8_lossy(&q.stdout).into_owned();
-                    let qout_trimmed = qout.trim();
-                    if let Ok(r) = serde_json::from_str::<serde_json::Value>(qout_trimmed) {
-                        let status = r.get("gen_status").and_then(|v| v.as_str()).unwrap_or("querying");
-                        if status == "success" {
-                            return Ok(serde_json::json!({"status": "success", "submit_id": submit_id, "result": r}));
-                        } else if status == "fail" {
-                            return Ok(serde_json::json!({"status": "fail", "submit_id": submit_id, "message": "视频生成失败", "detail": r}));
-                        }
-                    }
-                }
-                for _ in 0..12 {
-                    sleep(Duration::from_secs(10)).await;
-                    let q = Command::new("dreamina")
-                        .args(["query_result", "--submit_id", &submit_id])
-                        .output().await
-                        .map_err(|e| AppError::Internal(format!("query_result error: {e}")))?;
-                    let qout = String::from_utf8_lossy(&q.stdout).into_owned();
-                    let qout_trimmed = qout.trim();
-                    if let Ok(r) = serde_json::from_str::<serde_json::Value>(qout_trimmed) {
-                        let status = r.get("gen_status").and_then(|v| v.as_str()).unwrap_or("querying");
-                        if status == "success" {
-                            return Ok(serde_json::json!({"status": "success", "submit_id": submit_id, "result": r}));
-                        } else if status == "fail" {
-                            return Ok(serde_json::json!({"status": "fail", "submit_id": submit_id, "message": "视频生成失败", "detail": r}));
-                        }
-                    }
-                }
-                return Ok(serde_json::json!({"status": "timeout", "submit_id": submit_id, "message": "生成超时，请稍后用 submit_id 手动查询"}));
+                tracing::info!(submit_id=%submit_id, "dreamina multiframe2video submitted");
+                poll_dreamina(&submit_id).await?
             } else {
-                serde_json::json!({"stdout": stdout, "stderr": String::from_utf8_lossy(&output.stderr).trim(), "exit_code": output.status.code()})
+                return Err(AppError::Internal(format!("Failed to parse submit_id: {}", stdout.trim())));
             }
         }
 

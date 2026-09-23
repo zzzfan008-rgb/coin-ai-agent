@@ -11,6 +11,10 @@ long_description: |
   - 文生视频 / 图生视频 / 首尾帧视频 / 多镜视频
   - 任务状态轮询与结果下载
   - 历史任务查询
+
+  **图片引用格式**：用户上传的图片在消息中以 `[image: /uploads/chat-images/...]` 形式传给 LLM，
+  image2image 命令使用 `--images` 参数引用图片路径（绝对路径，如 `/Users/lionfan/projects/fashion-ai-platform/uploads/chat-images/{org_id}/{uuid}.{ext}`）。
+  注意：CLI 的 `--images` 需要真实文件路径，而非 URL。
 permissions:
   - skill:dreamina-cli
   - tool:text2image

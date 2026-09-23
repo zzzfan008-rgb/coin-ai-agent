@@ -22,8 +22,7 @@ echo "=== 启动 api-core (port 8081) ==="
 cd "$SCRIPT_DIR/api-core"
 DASHSCOPE_API_KEY="$QWEN_API_KEY" \
 QWEN_BASE_URL="$QWEN_BASE_URL" \
-./target/release/api-core \
-  > /tmp/api-core.log 2>&1 &
+./target/release/api-core > "$SCRIPT_DIR/../api-core.log" 2>&1 &
 echo "PID: $!"
 
 echo ""

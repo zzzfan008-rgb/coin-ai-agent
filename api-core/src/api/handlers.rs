@@ -1648,3 +1648,88 @@ pub struct StyleImagesListQuery {
     #[serde(default)]
     dept_id: Option<Uuid>,
 }
+
+// ── POST /v1/chat/upload-image ─────────────────────────────────────────────
+
+/// Upload a single image for use in chat messages (e.g. dreamina image2image).
+/// Returns a public URL that can be passed to the LLM as a tool argument.
+///
+/// Images are stored under `uploads/chat-images/{org_id}/{uuid}.{ext}` and
+/// served by the gateway at `/uploads/chat-images/...`.
+pub async fn upload_chat_image(
+    headers: axum::http::HeaderMap,
+    mut multipart: Multipart,
+) -> Result<Json<Value>, crate::error::AppError> {
+    let (h_org, _h_dept, _h_user) = header_identity(&headers);
+
+    let org_id = h_org
+        .as_deref()
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .unwrap_or_default();
+
+    let mut file_bytes: Vec<u8> = Vec::new();
+    let mut file_ext = String::from("png");
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| crate::error::AppError::BadRequest(format!("Invalid multipart: {e}")))?
+    {
+        match field.name().unwrap_or("") {
+            "file" => {
+                let name = field
+                    .file_name()
+                    .map(|n| n.to_string());
+                file_ext = name
+                    .as_ref()
+                    .and_then(|f| f.rsplit('.').next())
+                    .and_then(|e| {
+                        let e = e.to_lowercase();
+                        if matches!(e.as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif") {
+                            Some(e)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| String::from("png"));
+                file_bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|e| crate::error::AppError::BadRequest(format!("Read file: {e}")))?
+                    .to_vec();
+                if file_bytes.len() > 10 * 1024 * 1024 {
+                    return Err(crate::error::AppError::BadRequest(
+                        "Image exceeds 10MB limit".into(),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if file_bytes.is_empty() {
+        return Err(crate::error::AppError::BadRequest(
+            "No file provided".into(),
+        ));
+    }
+
+    let image_id = Uuid::new_v4();
+    // Write to project-root uploads/chat-images/.  Project root is:
+    //   - $CARGO_MANIFEST_DIR/../  (set when running via cargo run/build)
+    //   - else fall back to cwd and detect whether we are inside api-core/ subdir
+    let base = std::env::var("CARGO_MANIFEST_DIR")
+        .map(|p| std::path::PathBuf::from(&p).join("..").join("uploads/chat-images"))
+        .or_else(|_| std::env::current_dir().map(|p| p.join("uploads/chat-images")))
+        .unwrap_or_else(|_| std::path::PathBuf::from("uploads/chat-images"));
+    let dir = base.join(org_id.to_string());
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| crate::error::AppError::Internal(format!("Create dir: {e}")))?;
+    let path = dir.join(format!("{image_id}.{file_ext}"));
+    tokio::fs::write(&path, &file_bytes)
+        .await
+        .map_err(|e| crate::error::AppError::Internal(format!("Write file: {e}")))?;
+
+    let url = format!("/uploads/chat-images/{}/{}", org_id, format!("{image_id}.{file_ext}"));
+    Ok(Json(serde_json::json!({ "url": url })))
+}

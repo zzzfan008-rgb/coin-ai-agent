@@ -1,5 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
-import type { ReactNode } from 'react'
+import React, { type ReactNode } from 'react'
 import { AuthProvider, useAuth } from './hooks/useAuth'
 import Login from './pages/Login'
 import Register from './pages/Register'
@@ -22,6 +22,39 @@ function RequireAdmin({ children }: { children: ReactNode }) {
   return <>{children}</>
 }
 
+class ErrorBoundary extends React.Component<
+  { children: ReactNode },
+  { hasError: boolean; error: string }
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props)
+    this.state = { hasError: false, error: '' }
+  }
+  static getDerivedStateFromError(e: Error) {
+    return { hasError: true, error: e.message }
+  }
+  componentDidCatch(e: Error, info: React.ErrorInfo) {
+    console.error('[ErrorBoundary]', e, info)
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-screen text-center p-8">
+          <p className="text-sm font-semibold text-red-500">页面崩溃</p>
+          <p className="mt-2 text-xs text-gray-500 max-w-md">{this.state.error}</p>
+          <button
+            className="mt-4 px-4 py-2 bg-primary text-white text-sm rounded-lg"
+            onClick={() => location.reload()}
+          >
+            刷新页面
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
 export default function App() {
   return (
     <AuthProvider>
@@ -36,17 +69,17 @@ export default function App() {
               </RequireAuth>
             }
           >
-            <Route path="/" element={<Chat />} />
-            <Route path="/sessions/:id" element={<Chat />} />
-            <Route path="/projects/:id" element={<ProjectDetail />} />
+            <Route path="/" element={<ErrorBoundary><Chat /></ErrorBoundary>} />
+            <Route path="/sessions/:id" element={<ErrorBoundary><Chat /></ErrorBoundary>} />
+            <Route path="/projects/:id" element={<ErrorBoundary><ProjectDetail /></ErrorBoundary>} />
             {/* MCP 页：普通用户可管理自己被授权的开关；增删仅 admin 可见 */}
-            <Route path="/mcp" element={<McpAdmin />} />
+            <Route path="/mcp" element={<ErrorBoundary><McpAdmin /></ErrorBoundary>} />
             {/* 知识库：仅管理员 */}
             <Route
               path="/knowledge"
               element={
                 <RequireAdmin>
-                  <KnowledgeAdmin />
+                  <ErrorBoundary><KnowledgeAdmin /></ErrorBoundary>
                 </RequireAdmin>
               }
             />
