@@ -88,6 +88,13 @@ fn tool_spec_to_definition(name: &str, spec: &ToolSpec) -> ToolDefinition {
         .map(|p| {
             let mut obj = serde_json::Map::new();
             obj.insert("type".to_string(), serde_json::Value::String(p.param_type.clone()));
+            // JSON Schema requires `items` for array types; our SKILL.md specs
+            // only declare element type implicitly (string arrays), so fill it in.
+            if p.param_type == "array" {
+                let mut items = serde_json::Map::new();
+                items.insert("type".to_string(), serde_json::Value::String("string".to_string()));
+                obj.insert("items".to_string(), serde_json::Value::Object(items));
+            }
             if let Some(ref desc) = p.description {
                 obj.insert("description".to_string(), serde_json::Value::String(desc.clone()));
             }

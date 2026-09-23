@@ -48,16 +48,20 @@ tools:
         description: 清晰度/分辨率，取值根据模型版本决定（3.0/3.1 -> 1k 或 2k；4.0 及以上 -> 2k 或 4k；5.0Pro -> 1.5k、2k 或 4k）。默认推荐 2k（兼容最广）
 
   - name: image2image
-    description: 提交图生图任务（以图作为参考生成新图），返回 submit_id
+    description: 提交图生图任务（以 1-10 张图作为参考生成新图）。换装/试穿场景务必把所有相关图（人物图 + 服装图）一起传入 image_paths，只传单张会导致换装不生效。返回 submit_id
     parameters:
       - name: prompt
         type: string
         required: true
-        description: 生成图片的描述词
+        description: 生成图片的描述词。换装场景示例：「保留图1人物的面部、体型和姿态，将其身上的服装更换为图2的服装，保持光影和背景自然一致」
+      - name: image_paths
+        type: array
+        required: false
+        description: 参考图片的本地文件路径数组（1-10 张）。消息中出现多个图片标记（形如 [image 路径]）时，把它们全部按顺序放入此数组（人物图在前、服装图在后）。CLI 的 --images 需要真实文件路径，executor 会自动把 /uploads/ 开头的路径解析为绝对路径
       - name: image_path
         type: string
-        required: true
-        description: 参考图片的本地文件路径
+        required: false
+        description: 单张参考图片路径（向后兼容）。当只有一张图时可用；多张图请改用 image_paths
       - name: ratio
         type: string
         required: false

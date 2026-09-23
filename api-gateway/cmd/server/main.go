@@ -29,7 +29,13 @@ import (
 )
 
 func main() {
-	_ = godotenv.Load("api-gateway/.env")
+	// godotenv 不会返回已设置的变量覆盖，依次尝试常见位置（从项目根或 api-gateway/ 启动都能命中）
+	for _, p := range []string{".env", "api-gateway/.env", "../api-gateway/.env"} {
+		if err := godotenv.Load(p); err == nil {
+			log.Println("[ENV] loaded", p)
+			break
+		}
+	}
 
 	cfg := config.Load()
 
@@ -311,7 +317,9 @@ func main() {
 		Addr:         ":" + cfg.Port,
 		Handler:      r,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		// WriteTimeout 需覆盖 dreamina 生图/生视频全流程（提交+轮询最长 120s+LLM 总结），
+		// 0 = 不限制（由前端 abort 控制生命周期）
+		WriteTimeout: 0,
 		IdleTimeout:  120 * time.Second,
 	}
 

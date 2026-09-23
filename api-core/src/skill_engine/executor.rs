@@ -576,17 +576,57 @@ pub async fn execute_skill(
 
         ("dreamina-cli", "image2image") => {
             let prompt = arguments.get("prompt").and_then(|v| v.as_str()).unwrap_or("").trim();
-            let image_path_arg = arguments.get("image_path").and_then(|v| v.as_str()).unwrap_or("").trim();
-            if prompt.is_empty() || image_path_arg.is_empty() {
-                return Err(AppError::BadRequest("prompt and image_path are required".into()));
+
+            // 收集参考图：优先 image_paths 数组（换装需要人物图+服装图一起传），
+            // 兼容旧的单数 image_path。CLI --images 支持 1-10 张。
+            let mut raw_paths: Vec<String> = arguments
+                .get("image_paths")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            if raw_paths.is_empty() {
+                if let Some(single) = arguments
+                    .get("image_path")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                {
+                    raw_paths.push(single.to_string());
+                }
+            }
+            if prompt.is_empty() || raw_paths.is_empty() {
+                return Err(AppError::BadRequest(
+                    "prompt and image_paths (or image_path) are required".into(),
+                ));
+            }
+            if raw_paths.len() > 10 {
+                return Err(AppError::BadRequest(
+                    "image_paths supports at most 10 images".into(),
+                ));
             }
             let ratio = arguments.get("ratio").and_then(|v| v.as_str()).unwrap_or("1:1");
             let resolution = arguments.get("resolution_type").and_then(|v| v.as_str()).unwrap_or("2k");
-            let image_path = resolve_image_path(image_path_arg);
+            let image_paths: Vec<String> = raw_paths
+                .iter()
+                .map(|p| resolve_image_path(p).to_string_lossy().to_string())
+                .collect();
 
-            // Submit task
-            let output = Command::new("dreamina")
-                .args(["image2image", "--prompt", prompt, "--images", &image_path.to_string_lossy(), "--ratio", ratio, "--resolution_type", resolution])
+            // Submit task — 每张图一个 --images flag（CLI 为 strings 类型，可重复传入）
+            let mut cmd = Command::new("dreamina");
+            cmd.arg("image2image").arg("--prompt").arg(prompt);
+            for p in &image_paths {
+                cmd.arg("--images").arg(p);
+            }
+            cmd.arg("--ratio")
+                .arg(ratio)
+                .arg("--resolution_type")
+                .arg(resolution);
+            let output = cmd
                 .output()
                 .await
                 .map_err(|e| AppError::Internal(format!("dreamina CLI error: {e}")))?;
@@ -601,7 +641,7 @@ pub async fn execute_skill(
             if submit_id.is_empty() {
                 return Err(AppError::Internal(format!("Failed to parse submit_id: {}", stdout.trim())));
             }
-            tracing::info!(submit_id=%submit_id, "dreamina image2image submitted");
+            tracing::info!(submit_id=%submit_id, n_images=image_paths.len(), "dreamina image2image submitted");
 
             // Poll until success / fail / max_attempts
             let max_attempts = 24;
