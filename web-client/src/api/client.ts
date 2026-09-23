@@ -324,6 +324,7 @@ export async function searchSimilarImages(
   const res = await fetch('/api/images/similar', {
     method: 'POST',
     credentials: 'include', // send httpOnly cookie
+    headers: { 'X-Requested-With': 'XMLHttpRequest' },
     body: form,
   })
   if (!res.ok) throw await readError(res)

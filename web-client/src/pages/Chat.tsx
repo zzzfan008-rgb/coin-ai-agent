@@ -81,37 +81,40 @@ export default function Chat() {
     setInputValue('')
 
     if (images.length > 0) {
-      // 以图搜图（以第一张图为查询；附带文字也作为普通消息发送）
-      const file = images[0]
-      const queryUrl = URL.createObjectURL(file)
-      const user = getStoredUser()
+      // 意图判断：消息文字含搜图关键词才触发以图搜图，否则图片仅上传给 LLM（图生图）
+      const searchIntent = /搜图|找相似|相似款|类似款|同款|有没有.*类似|以图搜/.test(text)
 
-      setSimilarPanel({ queryUrl, results: [], loading: true, error: null })
+      if (searchIntent) {
+        // 以图搜图（以第一张图为查询；附带文字也作为普通消息发送）
+        const file = images[0]
+        const queryUrl = URL.createObjectURL(file)
+        const user = getStoredUser()
 
-      if (!user) {
-        setSimilarPanel({
-          queryUrl,
-          results: [],
-          loading: false,
-          error: '未登录，无法检索',
-        })
-        void chat.sendMessage(text)
-        return
-      }
+        setSimilarPanel({ queryUrl, results: [], loading: true, error: null })
 
-      void (async () => {
-        try {
-          const results = await searchSimilarImages(file)
-          setSimilarPanel({ queryUrl, results, loading: false, error: null })
-        } catch (e) {
+        if (!user) {
           setSimilarPanel({
             queryUrl,
             results: [],
             loading: false,
-            error: e instanceof Error ? e.message : '以图搜图失败',
+            error: '未登录，无法检索',
           })
+        } else {
+          void (async () => {
+            try {
+              const results = await searchSimilarImages(file)
+              setSimilarPanel({ queryUrl, results, loading: false, error: null })
+            } catch (e) {
+              setSimilarPanel({
+                queryUrl,
+                results: [],
+                loading: false,
+                error: e instanceof Error ? e.message : '以图搜图失败',
+              })
+            }
+          })()
         }
-      })()
+      }
 
       // Upload images and append their URLs to the message text so the LLM
       // can reference them (e.g. for dreamina image2image).

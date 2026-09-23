@@ -113,7 +113,7 @@ export function ChatInput({
             type="button"
             onClick={() => fileRef.current?.click()}
             disabled={disabled || isStreaming}
-            title="上传图片以图搜图"
+            title="上传图片（发消息给 AI 生图 / 文字含「搜图」时以图搜图）"
             className="ml-1.5 mb-2 flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-bg hover:text-content disabled:opacity-50"
           >
             <ImagePlus size={18} />
@@ -142,7 +142,7 @@ export function ChatInput({
             placeholder={
               disabled
                 ? '正在加载会话…'
-                : '输入消息 / 拖拽或点击上传款式图片以图搜图'
+                : '输入消息，可拖拽或点击上传图片（AI 生图 / 输入「搜图」找相似款）'
             }
             className="block max-h-40 w-full resize-none bg-transparent py-2.5 pl-0 pr-1 text-sm text-content placeholder:text-faint focus:outline-none disabled:opacity-50"
           />
