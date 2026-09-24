@@ -1,0 +1,92 @@
+# Coin-AI 平台 CI — 三个服务并行构建 + 测试
+# api-core (Rust) / api-gateway (Go) / web-client (Vite+React)
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api-core:
+    name: api-core (Rust)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api-core
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: api-core
+
+      - name: Check formatting
+        run: cargo fmt --check || echo "::warning::cargo fmt 有差异（不阻塞）"
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings || echo "::warning::clippy 有告警（不阻塞）"
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Test
+        run: cargo test --release
+
+  api-gateway:
+    name: api-gateway (Go)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api-gateway
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: api-gateway/go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build -o /tmp/gateway-server ./cmd/server/
+
+      - name: Test
+        run: go test ./...
+
+  web-client:
+    name: web-client (React)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web-client
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web-client/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck + Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
