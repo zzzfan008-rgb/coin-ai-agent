@@ -130,3 +130,8 @@ qdrant-data/
 tmp/
 temp/
 uploads/
+
+# 编译产物（构建生成，不入库）
+api-gateway/server
+api-gateway/server_new
+bin/

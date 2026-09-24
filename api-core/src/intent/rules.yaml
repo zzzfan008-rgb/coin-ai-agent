@@ -18,6 +18,10 @@
   skill: style-inspiration
   keywords: [款式, 版型, 廓形, 灵感, 设计, A字, H型, 连衣裙, 衬衫, 外套, 剪裁, 风格, 穿搭, style, silhouette, design]
 
+- intent: image
+  skill: dreamina-cli
+  keywords: [生成图片, 生成图, 生图, 画一张, 画个, 画图, AI绘图, AI画图, 模特图, 商品图, 效果图, image, picture, photo, 换装, 换装图, image2image, 文生图, 图生图]
+
 - intent: general
   skill: null
   keywords: []
