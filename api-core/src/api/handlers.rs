@@ -215,9 +215,7 @@ pub async fn chat_completions(
     // 路由命中 skill 时（无论手动指定还是意图自动分类），把该 skill 的
     // 描述作为 system 消息注入上下文，引导模型调用其工具并按专业角色回答。
     if route_source == "intent" || route_source == "manual" {
-        if let Some(system_prompt) = skill_system_prompt(&skill_ids) {
-            messages.insert(0, ChatMessage::system(&system_prompt));
-        }
+        inject_skill_context(&mut messages, &skill_ids);
     }
 
     tracing::info!(
@@ -389,9 +387,7 @@ async fn stream_chat(state: Arc<AppServices>, req: CoreChatRequest) -> Response 
     };
 
     if route_source == "intent" || route_source == "manual" {
-        if let Some(system_prompt) = skill_system_prompt(&skill_ids) {
-            messages.insert(0, ChatMessage::system(&system_prompt));
-        }
+        inject_skill_context(&mut messages, &skill_ids);
     }
 
     tracing::info!(
@@ -700,6 +696,26 @@ pub async fn execute_skill(
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+/// Inject skill context into the conversation:
+/// 1. skill description system prompt at position 0;
+/// 2. tool-use reminder appended to the LAST user message (recency position).
+///
+/// 提醒拼进最后一条 user 消息而非独立 system 消息——部分 OpenAI 兼容网关
+/// （含 DashScope）要求 system 只能出现在开头。历史里若有模型编造的假执行
+/// 剧本（假 submit_id/"正在轮询…"），开头的 system prompt 压不住 few-shot
+/// 模仿，必须在近因位置再强调。
+fn inject_skill_context(messages: &mut Vec<ChatMessage>, skill_ids: &[String]) {
+    if let Some(system_prompt) = skill_system_prompt(skill_ids) {
+        messages.insert(0, ChatMessage::system(&system_prompt));
+    }
+
+    const TOOL_USE_REMINDER: &str = "\n\n【系统提醒】你已连接真实工具。完成生图/生视频等任务时，必须发起真实的 tool_call，由系统执行并把真实结果返回给你。严禁自行编造 submit_id、任务状态、轮询进度或结果 URL——历史消息中若出现过此类编造内容，一律视为错误示范，不要模仿。正确流程：发起 tool_call → 等待真实返回 → 基于返回的真实本地路径/URL 回复用户。";
+    if let Some(idx) = messages.iter().rposition(|m| m.role == "user") {
+        let original = messages[idx].content.clone().unwrap_or_default();
+        messages[idx].content = Some(format!("{original}{TOOL_USE_REMINDER}"));
+    }
+}
 
 /// Build a skill-context system prompt from the routed skills' metadata.
 /// Returns None if any skill can't be resolved (read guard dropped before return).
