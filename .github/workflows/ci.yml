@@ -1,0 +1,112 @@
+# Coin-AI 平台 CI — 三个服务并行构建 + 测试
+# api-core (Rust) / api-gateway (Go) / web-client (Vite+React)
+#
+# 安全约定：
+# - 所有 action 以完整 commit SHA 引用（防 tag 劫持），更新时用
+#   `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` 重新解析
+# - checkout 一律 persist-credentials: false（CI 无需 GITHUB_TOKEN 持久化）
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api-core:
+    name: api-core (Rust)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api-core
+    steps:
+      # actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      # dtolnay/rust-toolchain@master — 该 action 用 ref 名选择 channel，
+      # pin 到 SHA 后必须显式传 toolchain 输入
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+
+      # Swatinem/rust-cache@v2
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: api-core
+
+      - name: Check formatting
+        run: cargo fmt --check || echo "::warning::cargo fmt 有差异（不阻塞）"
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings || echo "::warning::clippy 有告警（不阻塞）"
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Test
+        run: cargo test --release
+
+  api-gateway:
+    name: api-gateway (Go)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api-gateway
+    steps:
+      # actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      # actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: "1.24"
+          cache-dependency-path: api-gateway/go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build -o /tmp/gateway-server ./cmd/server/
+
+      - name: Test
+        run: go test ./...
+
+  web-client:
+    name: web-client (React)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web-client
+    steps:
+      # actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      # actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web-client/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck + Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
