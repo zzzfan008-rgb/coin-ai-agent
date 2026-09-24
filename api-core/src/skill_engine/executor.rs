@@ -25,12 +25,33 @@ fn resolve_image_path(image_arg: &str) -> PathBuf {
         PathBuf::from(image_arg)
     } else if image_arg.starts_with("/uploads/") {
         // Relative to project root (where api-core runs from)
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(&image_arg[1..]) // strip leading '/'
+        project_root().join(&image_arg[1..]) // strip leading '/'
     } else {
         PathBuf::from(image_arg)
     }
+}
+
+/// Project root — api-core may run from the repo root or the api-core/ dir.
+fn project_root() -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if cwd.ends_with("api-core") {
+        cwd.parent().map(|p| p.to_path_buf()).unwrap_or(cwd)
+    } else {
+        cwd
+    }
+}
+
+/// Ensure `uploads/generated/{org_id}/` exists; return (abs_dir, url_prefix).
+fn generated_media_dir(org_id: Uuid) -> Result<(PathBuf, String)> {
+    let dir = project_root()
+        .join("uploads")
+        .join("generated")
+        .join(org_id.to_string());
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        AppError::Internal(format!("failed to create generated dir {}: {e}", dir.display()))
+    })?;
+    let url_prefix = format!("/uploads/generated/{org_id}");
+    Ok((dir, url_prefix))
 }
 use crate::skill_engine::color_theory;
 use tokio::process::Command;
@@ -203,8 +224,8 @@ pub async fn execute_skill(
 
     let (org_id, dept_id) = parse_ctx_uuids(user_ctx)?;
 
-    // ── Helper: poll dreamina submit_id until done, return structured result ──────
-    async fn poll_dreamina(submit_id: &str) -> Result<Value> {
+    // ── Helper: poll dreamina submit_id until done, download media locally ──────
+    async fn poll_dreamina(submit_id: &str, org_id: Uuid) -> Result<Value> {
         let max_attempts = 24;
         for attempt in 1..=max_attempts {
             tokio::time::sleep(tokio::time::Duration::from_secs(
@@ -239,7 +260,8 @@ pub async fn execute_skill(
             tracing::info!(submit_id=%submit_id, status=%status, attempt=%attempt, "dreamina polling");
 
             if status == "success" {
-                let images: Vec<String> = poll_json
+                // 即梦签名 URL（临时，数小时后过期）——留存备查
+                let image_urls: Vec<String> = poll_json
                     .get("result_json")
                     .and_then(|r| r.get("images"))
                     .and_then(|imgs| imgs.as_array())
@@ -249,12 +271,96 @@ pub async fn execute_skill(
                         }).collect()
                     })
                     .unwrap_or_default();
+                let video_urls: Vec<String> = poll_json
+                    .get("result_json")
+                    .and_then(|r| r.get("videos"))
+                    .and_then(|vids| vids.as_array())
+                    .map(|arr| {
+                        arr.iter().filter_map(|v| {
+                            v.get("video_url")
+                                .or_else(|| v.get("url"))
+                                .and_then(|u| u.as_str())
+                                .map(|s| s.to_string())
+                        }).collect()
+                    })
+                    .unwrap_or_default();
+
+                // 下载到 uploads/generated/{org_id}/ —— 本地路径持久且与前端同源
+                let (dir, url_prefix) = generated_media_dir(org_id)?;
+                let dl_out = Command::new("dreamina")
+                    .args([
+                        "query_result",
+                        "--submit_id",
+                        submit_id,
+                        "--download_dir",
+                        &dir.to_string_lossy(),
+                    ])
+                    .output()
+                    .await;
+
+                let mut local_images: Vec<String> = Vec::new();
+                let mut local_videos: Vec<String> = Vec::new();
+                match dl_out {
+                    Ok(o) if o.status.success() => {
+                        let dl_stdout = String::from_utf8_lossy(&o.stdout);
+                        if let Ok(dl_json) =
+                            serde_json::from_str::<serde_json::Value>(dl_stdout.trim())
+                        {
+                            let collect = |key: &str| -> Vec<String> {
+                                dl_json
+                                    .get("result_json")
+                                    .and_then(|r| r.get(key))
+                                    .and_then(|a| a.as_array())
+                                    .map(|arr| {
+                                        arr.iter()
+                                            .filter_map(|it| {
+                                                it.get("path")
+                                                    .and_then(|p| p.as_str())
+                                                    .and_then(|p| {
+                                                        std::path::Path::new(p).file_name()
+                                                    })
+                                                    .map(|f| {
+                                                        format!("{}/{}", url_prefix, f.to_string_lossy())
+                                                    })
+                                            })
+                                            .collect()
+                                    })
+                                    .unwrap_or_default()
+                            };
+                            local_images = collect("images");
+                            local_videos = collect("videos");
+                        }
+                    }
+                    Ok(o) => tracing::warn!(
+                        submit_id = %submit_id,
+                        stderr = %String::from_utf8_lossy(&o.stderr),
+                        "download query_result failed; falling back to signed URLs"
+                    ),
+                    Err(e) => tracing::warn!(
+                        submit_id = %submit_id,
+                        "download query_result error: {e}; falling back to signed URLs"
+                    ),
+                }
+
+                // 主显示：本地路径优先，下载失败时回退签名 URL
+                let images = if local_images.is_empty() { image_urls.clone() } else { local_images };
+                let videos = if local_videos.is_empty() { video_urls.clone() } else { local_videos };
+
+                tracing::info!(
+                    submit_id = %submit_id,
+                    n_images = images.len(),
+                    n_videos = videos.len(),
+                    "dreamina media downloaded to uploads/generated"
+                );
 
                 return Ok(serde_json::json!({
                     "status": "success",
                     "submit_id": submit_id,
                     "images": images,
-                    "message": "生成成功"
+                    "videos": videos,
+                    "remote_image_urls": image_urls,
+                    "remote_video_urls": video_urls,
+                    "message": "生成成功。images/videos 为本机持久路径（uploads/generated/，可直接展示）；remote_*_urls 为即梦签名 URL（数小时后过期，仅备查）。回复用户时请使用本地路径。"
                 }));
             } else if status == "fail" {
                 return Ok(serde_json::json!({
@@ -513,65 +619,8 @@ pub async fn execute_skill(
             }
             tracing::info!(submit_id=%submit_id, "dreamina text2image submitted");
 
-            // Poll until success / fail / max_attempts
-            let max_attempts = 24; // ~2 min with backoff
-            for attempt in 1..=max_attempts {
-                tokio::time::sleep(tokio::time::Duration::from_secs(
-                    if attempt <= 3 { 5 } else { 10 }
-                )).await;
-
-                let poll_out = Command::new("dreamina")
-                    .args(["query_result", "--submit_id", &submit_id])
-                    .output()
-                    .await
-                    .map_err(|e| AppError::Internal(format!("dreamina CLI error: {e}")))?;
-
-                let poll_stdout = String::from_utf8_lossy(&poll_out.stdout);
-                let poll_json: serde_json::Value = serde_json::from_str(poll_stdout.trim())
-                    .map_err(|e| AppError::Internal(format!("Invalid JSON from query_result: {e}")))?;
-
-                let status = poll_json.get("gen_status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-
-                tracing::info!(submit_id=%submit_id, status=%status, attempt=%attempt, "dreamina polling");
-
-                if status == "success" {
-                    let images: Vec<String> = poll_json
-                        .get("result_json")
-                        .and_then(|r| r.get("images"))
-                        .and_then(|imgs| imgs.as_array())
-                        .map(|arr| {
-                            arr.iter().filter_map(|img| {
-                                img.get("image_url").and_then(|u| u.as_str()).map(|s| s.to_string())
-                            }).collect()
-                        })
-                        .unwrap_or_default();
-
-                    if !images.is_empty() {
-                        return Ok(serde_json::json!({
-                            "status": "success",
-                            "submit_id": submit_id,
-                            "images": images,
-                            "message": "图片生成成功"
-                        }));
-                    }
-                } else if status == "fail" {
-                    return Ok(serde_json::json!({
-                        "status": "fail",
-                        "submit_id": submit_id,
-                        "message": "图片生成失败"
-                    }));
-                }
-                // else querying → continue polling
-            }
-
-            // Timeout
-            serde_json::json!({
-                "status": "timeout",
-                "submit_id": submit_id,
-                "message": "生成超时，请稍后手动查询结果"
-            })
+            // Poll until done, then download media to uploads/generated/
+            poll_dreamina(&submit_id, org_id).await?
         }
 
         ("dreamina-cli", "image2image") => {
@@ -643,63 +692,8 @@ pub async fn execute_skill(
             }
             tracing::info!(submit_id=%submit_id, n_images=image_paths.len(), "dreamina image2image submitted");
 
-            // Poll until success / fail / max_attempts
-            let max_attempts = 24;
-            for attempt in 1..=max_attempts {
-                tokio::time::sleep(tokio::time::Duration::from_secs(
-                    if attempt <= 3 { 5 } else { 10 }
-                )).await;
-
-                let poll_out = Command::new("dreamina")
-                    .args(["query_result", "--submit_id", &submit_id])
-                    .output()
-                    .await
-                    .map_err(|e| AppError::Internal(format!("dreamina CLI error: {e}")))?;
-
-                let poll_stdout = String::from_utf8_lossy(&poll_out.stdout);
-                let poll_json: serde_json::Value = serde_json::from_str(poll_stdout.trim())
-                    .map_err(|e| AppError::Internal(format!("Invalid JSON from query_result: {e}")))?;
-
-                let status = poll_json.get("gen_status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-
-                tracing::info!(submit_id=%submit_id, status=%status, attempt=%attempt, "dreamina polling");
-
-                if status == "success" {
-                    let images: Vec<String> = poll_json
-                        .get("result_json")
-                        .and_then(|r| r.get("images"))
-                        .and_then(|imgs| imgs.as_array())
-                        .map(|arr| {
-                            arr.iter().filter_map(|img| {
-                                img.get("image_url").and_then(|u| u.as_str()).map(|s| s.to_string())
-                            }).collect()
-                        })
-                        .unwrap_or_default();
-
-                    if !images.is_empty() {
-                        return Ok(serde_json::json!({
-                            "status": "success",
-                            "submit_id": submit_id,
-                            "images": images,
-                            "message": "图片生成成功"
-                        }));
-                    }
-                } else if status == "fail" {
-                    return Ok(serde_json::json!({
-                        "status": "fail",
-                        "submit_id": submit_id,
-                        "message": "图片生成失败"
-                    }));
-                }
-            }
-
-            serde_json::json!({
-                "status": "timeout",
-                "submit_id": submit_id,
-                "message": "生成超时，请稍后手动查询结果"
-            })
+            // Poll until done, then download media to uploads/generated/
+            poll_dreamina(&submit_id, org_id).await?
         }
 
         ("dreamina-cli", "image_upscale") => {
@@ -723,7 +717,7 @@ pub async fn execute_skill(
                 return Err(AppError::Internal(format!("Failed to parse submit_id: {}", stdout.trim())));
             }
             tracing::info!(submit_id=%submit_id, "dreamina image_upscale submitted");
-            poll_dreamina(&submit_id).await?
+            poll_dreamina(&submit_id, org_id).await?
         }
 
         ("dreamina-cli", "text2video") => {
@@ -762,7 +756,7 @@ pub async fn execute_skill(
                 return Err(AppError::Internal(format!("Failed to parse submit_id: {}", stdout.trim())));
             }
             tracing::info!(submit_id=%submit_id, "dreamina text2video submitted");
-            poll_dreamina(&submit_id).await?
+            poll_dreamina(&submit_id, org_id).await?
         }
 
         ("dreamina-cli", "image2video") => {
@@ -805,7 +799,7 @@ pub async fn execute_skill(
                 return Err(AppError::Internal(format!("Failed to parse submit_id: {}", stdout.trim())));
             }
             tracing::info!(submit_id=%submit_id, "dreamina image2video submitted");
-            poll_dreamina(&submit_id).await?
+            poll_dreamina(&submit_id, org_id).await?
         }
 
         ("dreamina-cli", "frames2video") => {
@@ -852,7 +846,7 @@ pub async fn execute_skill(
                 return Err(AppError::Internal(format!("Failed to parse submit_id: {}", stdout.trim())));
             }
             tracing::info!(submit_id=%submit_id, "dreamina frames2video submitted");
-            poll_dreamina(&submit_id).await?
+            poll_dreamina(&submit_id, org_id).await?
         }
 
         ("dreamina-cli", "multimodal2video") => {
@@ -906,7 +900,7 @@ pub async fn execute_skill(
                 return Err(AppError::Internal(format!("Failed to parse submit_id: {}", stdout.trim())));
             }
             tracing::info!(submit_id=%submit_id, "dreamina multimodal2video submitted");
-            poll_dreamina(&submit_id).await?
+            poll_dreamina(&submit_id, org_id).await?
         }
 
         ("dreamina-cli", "multiframe2video") => {
@@ -954,7 +948,7 @@ pub async fn execute_skill(
             };
             if let Some(submit_id) = submit_id {
                 tracing::info!(submit_id=%submit_id, "dreamina multiframe2video submitted");
-                poll_dreamina(&submit_id).await?
+                poll_dreamina(&submit_id, org_id).await?
             } else {
                 return Err(AppError::Internal(format!("Failed to parse submit_id: {}", stdout.trim())));
             }
