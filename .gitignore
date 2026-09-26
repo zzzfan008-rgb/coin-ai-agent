@@ -9,7 +9,6 @@ go.work.sum
 # ── Rust ──────────────────────────────────────────────────────────────────────
 api-core/target/
 api-core/.cargo/
-Cargo.lock
 *.rlib
 *.so
 

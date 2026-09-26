@@ -164,8 +164,17 @@ func main() {
 		})
 	})
 
+	// CORS: comma-separated ALLOWED_ORIGINS env var; empty = localhost-only for local dev.
+	corsOrigins := strings.Split(os.Getenv("ALLOWED_ORIGINS"), ",")
+	for i, o := range corsOrigins {
+		corsOrigins[i] = strings.TrimSpace(o)
+	}
+	if len(corsOrigins) == 0 || corsOrigins[0] == "" {
+		corsOrigins = []string{"http://localhost:8080", "http://localhost:5173"}
+	}
 	r.Use(handlers.CORS(
-		handlers.AllowedOrigins([]string{"*"}),
+		handlers.AllowedOrigins(corsOrigins),
+		handlers.AllowCredentials(),
 		handlers.AllowedMethods([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}),
 		handlers.AllowedHeaders([]string{"Authorization", "Content-Type", "X-Request-ID", "X-Requested-With"}),
 	))
@@ -279,7 +288,17 @@ func main() {
 		if _, err := os.Stat(uploadsDir); err == nil {
 			r.PathPrefix("/uploads/").Handler(
 				http.StripPrefix("/uploads/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					http.ServeFile(w, r, uploadsDir+"/"+filepath.Clean(r.URL.Path))
+					clean := filepath.Clean(r.URL.Path)
+					// Path traversal guard: resolved path must stay inside uploadsDir.
+					if !strings.HasPrefix(clean, string(os.PathSeparator)) {
+						clean = string(os.PathSeparator) + clean
+					}
+					fullPath := uploadsDir + clean
+					if !strings.HasPrefix(filepath.Clean(fullPath), filepath.Clean(uploadsDir)+string(os.PathSeparator)) {
+						http.NotFound(w, r)
+						return
+					}
+					http.ServeFile(w, r, fullPath)
 				})),
 			)
 			log.Println("[UPLOADS] serving uploads from:", uploadsDir, "at /uploads/")

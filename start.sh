@@ -8,7 +8,7 @@ WEB_DIST="$SCRIPT_DIR/web-client/dist"
 # ── qwen 凭据（从 .env 或直接填入）────────────
 source "$SCRIPT_DIR/.env" 2>/dev/null || true
 
-QWEN_API_KEY="${DASHSCOPE_API_KEY:-sk-ws-H.PLDRXLH.HhMa.MEUCIHPDeRab4IsLORju_XmPrpUPkqcNoLVoz5gW43MxJHfqAiEAlAqUH8kc3Qigj9Hp7Th-q9QmaEhqQDMcthtXLGyf8Ig}"
+QWEN_API_KEY="${DASHSCOPE_API_KEY:-}"
 QWEN_BASE_URL="${QWEN_BASE_URL:-https://maas.qianwenaiapi.com/compatible-mode/v1}"
 
 echo "=== 停止旧进程 ==="

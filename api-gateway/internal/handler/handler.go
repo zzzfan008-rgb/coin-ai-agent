@@ -45,6 +45,8 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "password must be at least 6 characters")
 		return
 	}
+	// Force role to "designer" — clients must not be able to register as admin.
+	req.Role = "designer"
 
 	resp, err := h.svc.Register(r.Context(), req)
 	if err != nil {

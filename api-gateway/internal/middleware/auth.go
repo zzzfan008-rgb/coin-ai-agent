@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -57,11 +58,14 @@ func GetClientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-// writeError writes a JSON error response.
+// writeError writes a JSON error response safely using json.Marshal
+// so that a malicious code/msg value containing quotes cannot break JSON structure.
 func writeError(w http.ResponseWriter, status int, code, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	w.Write([]byte(`{"error":{"code":"` + code + `","message":"` + msg + `"}}`))
+	_ = json.NewEncoder(w).Encode(map[string]map[string]string{
+		"error": {"code": code, "message": msg},
+	})
 }
 
 // responseWriter wraps http.ResponseWriter to capture status code.

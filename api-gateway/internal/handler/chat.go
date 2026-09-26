@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -27,9 +28,26 @@ func NewChatHandler(chatSvc *service.ChatService, jwtSvc *auth.JWTService) *Chat
 	return &ChatHandler{chatSvc: chatSvc, jwtSvc: jwtSvc}
 }
 
+// allowedOrigins is comma-separated; falls back to a single entry for local dev.
+func isOriginAllowed(origin string) bool {
+	env := os.Getenv("ALLOWED_ORIGINS")
+	if env == "" {
+		// Local dev fallback — restrict to localhost variants only.
+		return strings.HasPrefix(origin, "http://localhost") ||
+			strings.HasPrefix(origin, "http://127.0.0.1")
+	}
+	for _, allowed := range strings.Split(env, ",") {
+		allowed = strings.TrimSpace(allowed)
+		if allowed != "" && (origin == allowed || origin == allowed+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins in dev; restrict in production
+		return isOriginAllowed(r.Header.Get("Origin"))
 	},
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
