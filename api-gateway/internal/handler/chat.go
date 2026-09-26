@@ -65,11 +65,11 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Model == "" {
-		req.Model = "qwen-plus"
+		req.Model = "qwen3.8-flash"
 	}
 	switch req.Model {
-	case "gpt-4o", "fashion-ai-default":
-		req.Model = "qwen-plus"
+	case "gpt-4o", "fashion-ai-default", "qwen-plus":
+		req.Model = "qwen3.8-flash"
 	}
 
 	isStream := req.Stream != nil && *req.Stream
