@@ -27,11 +27,9 @@ func Load() *Config {
 	sseIdle, _ := strconv.Atoi(env("SSE_IDLE_TIMEOUT", "120"))
 	sseWrite, _ := strconv.Atoi(env("SSE_WRITE_TIMEOUT", "300"))
 
-	secret := os.Getenv("JWT_SECRET")
+	secret := env("JWT_SECRET", "dev-only-insecure-fallback-32chars!!")
 	// Warn on insecure default in production.
-	// In dev, JWT_SECRET may be unset and the server starts with the placeholder;
-	// the JWT middleware rejects expired/invalid tokens anyway.
-	if os.Getenv("NODE_ENV") == "production" && (secret == "" || secret == "change-me-in-production-32chars!!") {
+	if os.Getenv("NODE_ENV") == "production" && (secret == "" || secret == "dev-only-insecure-fallback-32chars!!") {
 		fmt.Fprintf(os.Stderr, "[FATAL] JWT_SECRET is not set or still at insecure default in production; refusing to start\n")
 		os.Exit(1)
 	}
