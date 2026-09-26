@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -80,9 +81,13 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 		userID, orgID, deptID, role = claims.Subject, claims.OrgID, claims.DeptID, claims.Role
 	}
 
-	// Use a detached context with 90s timeout so browser cancel/refresh
-	// doesn't abort the upstream core request mid-stream.
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	// Use SSE_WRITE_TIMEOUT from env (default 300s) so long streams are not cut by the server.
+	// WriteTimeout on the http.Server is 0 so long streams are not cut by the server.
+	sseWriteSecs := 300
+	if v, err := strconv.Atoi(os.Getenv("SSE_WRITE_TIMEOUT")); err == nil && v > 0 {
+		sseWriteSecs = v
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(sseWriteSecs)*time.Second)
 	defer cancel()
 
 	resp, err := h.chatSvc.ProxyRequestWithContext(ctx, req, userID, orgID, deptID, role, middleware.GetClientIP(r))
@@ -155,6 +160,12 @@ func (h *ChatHandler) WSChat(w http.ResponseWriter, r *http.Request) {
 	claims, err := h.jwtSvc.Validate(token)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid or expired token")
+		return
+	}
+
+	// Verify Origin before WebSocket upgrade (same policy as HTTP CheckOrigin).
+	if !isOriginAllowed(r.Header.Get("Origin")) {
+		writeError(w, http.StatusForbidden, "ORIGIN_FORBIDDEN", "disallowed origin")
 		return
 	}
 

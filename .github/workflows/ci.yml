@@ -110,3 +110,25 @@ jobs:
 
       - name: Test
         run: npm test
+
+  codeql:
+    name: CodeQL SAST
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@5d5eb9b86a00fd20de72412ef7a06ad4e16ccf34
+        with:
+          languages: [go, typescript]
+
+      - name: Perform Analysis
+        uses: github/codeql-action/analyze@5d5eb9b86a00fd20de72412ef7a06ad4e16ccf34
+        with:
+          category: "/language:go,typescript"
+

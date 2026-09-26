@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 )
@@ -25,10 +26,17 @@ func Load() *Config {
 	expHours, _ := strconv.Atoi(env("JWT_EXP_HOURS", "72"))
 	sseIdle, _ := strconv.Atoi(env("SSE_IDLE_TIMEOUT", "120"))
 	sseWrite, _ := strconv.Atoi(env("SSE_WRITE_TIMEOUT", "300"))
+
+	// Warn on insecure default — never silently start with the placeholder secret.
+	if os.Getenv("JWT_SECRET") == "" {
+		fmt.Fprintf(os.Stderr, "[FATAL] JWT_SECRET is not set; refusing to start with insecure default\n")
+		os.Exit(1)
+	}
+
 	return &Config{
 		Port:          env("PORT", "8080"),
 		JWTKind:       env("JWT_KIND", "HS256"),
-		JWTSecret:     env("JWT_SECRET", "change-me-in-production-32chars!!"),
+		JWTSecret:     os.Getenv("JWT_SECRET"),
 		JWTExpHours:   expHours,
 		DatabaseURL:   env("DATABASE_URL", "postgres://fashion_ai:***@localhost:5432/fashion_ai?sslmode=disable"),
 		RedisURL:      env("REDIS_URL", "redis://localhost:6379"),
