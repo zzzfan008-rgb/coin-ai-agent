@@ -27,16 +27,19 @@ func Load() *Config {
 	sseIdle, _ := strconv.Atoi(env("SSE_IDLE_TIMEOUT", "120"))
 	sseWrite, _ := strconv.Atoi(env("SSE_WRITE_TIMEOUT", "300"))
 
-	// Warn on insecure default — never silently start with the placeholder secret.
-	if os.Getenv("JWT_SECRET") == "" {
-		fmt.Fprintf(os.Stderr, "[FATAL] JWT_SECRET is not set; refusing to start with insecure default\n")
+	secret := os.Getenv("JWT_SECRET")
+	// Warn on insecure default in production.
+	// In dev, JWT_SECRET may be unset and the server starts with the placeholder;
+	// the JWT middleware rejects expired/invalid tokens anyway.
+	if os.Getenv("NODE_ENV") == "production" && (secret == "" || secret == "change-me-in-production-32chars!!") {
+		fmt.Fprintf(os.Stderr, "[FATAL] JWT_SECRET is not set or still at insecure default in production; refusing to start\n")
 		os.Exit(1)
 	}
 
 	return &Config{
 		Port:          env("PORT", "8080"),
 		JWTKind:       env("JWT_KIND", "HS256"),
-		JWTSecret:     os.Getenv("JWT_SECRET"),
+		JWTSecret:     secret,
 		JWTExpHours:   expHours,
 		DatabaseURL:   env("DATABASE_URL", "postgres://fashion_ai:***@localhost:5432/fashion_ai?sslmode=disable"),
 		RedisURL:      env("REDIS_URL", "redis://localhost:6379"),

@@ -137,6 +137,21 @@ func main() {
 
 	// ── Router ───────────────────────────────────────────────────────────────
 	r := mux.NewRouter()
+	// Path-traversal guard: intercept before mux normalizes the path.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			rawPath := req.URL.RawPath
+			if rawPath == "" {
+				rawPath = req.URL.Path
+			}
+if strings.Contains(rawPath, "..") {
+				http.NotFound(w, req)
+				return
+			}
+			next.ServeHTTP(w, req)
+		})
+	})
+
 
 	// Recovery + Request ID middleware (func(http.Handler) http.Handler)
 	r.Use(func(next http.Handler) http.Handler {
@@ -280,7 +295,7 @@ func main() {
 	webDist := os.Getenv("WEB_DIST")
 
 	// ── Uploads static file serving ────────────────────────────────────────────
-	// Serve uploaded chat images so the frontend can embed them in chat messages.
+	// Serve uploaded chat images so the chat can embed them in chat messages.
 	// Images are saved relative to the project root (where api-core runs from).
 	if webDist != "" {
 		uploadsDir := filepath.Join(filepath.Dir(webDist), "..", "uploads")
@@ -288,8 +303,17 @@ func main() {
 		if _, err := os.Stat(uploadsDir); err == nil {
 			r.PathPrefix("/uploads/").Handler(
 				http.StripPrefix("/uploads/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					// Check for path traversal on the RAW (un-normalized) URL path.
+					// r.URL.Path is already cleaned by Go, but RawPath preserves "..".
+					rawPath := r.URL.RawPath
+					if rawPath == "" {
+						rawPath = r.URL.Path // fallback if no escaping needed
+					}
+					if strings.Contains(rawPath, "..") {
+http.NotFound(w, r)
+						return
+					}
 					clean := filepath.Clean(r.URL.Path)
-					// Path traversal guard: resolved path must stay inside uploadsDir.
 					if !strings.HasPrefix(clean, string(os.PathSeparator)) {
 						clean = string(os.PathSeparator) + clean
 					}
@@ -315,18 +339,65 @@ func main() {
 	// (supports client-side routing: /, /login, /project/:id, etc.)
 	if webDist != "" {
 		r.PathPrefix("/").Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Defense-in-depth: ensure the normalized path doesn't escape webDist.
+			// Go's http mux already resolves ".." before routing, but we double-check
+			// so a hypothetical future middleware cannot re-introduce traversal.
 			clean := filepath.Clean(r.URL.Path)
-			// Serve real files as-is (assets, fonts, favicon, etc.)
-			if !strings.Contains(clean, ".") == false {
-				// Path has an extension — try to serve as static file
-				info, err := os.Stat(webDist + clean)
-				if err == nil && !info.IsDir() {
-					http.ServeFile(w, r, webDist+clean)
+			// // rawPath preserves ".." that Clean() normalizes away.
+				// Block if any segment tried to escape the webDist namespace.
+				rawPath := r.URL.RawPath
+				if rawPath == "" {
+					rawPath = r.URL.Path
+				}
+				if strings.Contains(rawPath, "..") {
+					log.Printf("[MIDDLEWARE] BLOCKED path traversal: rawPath=%q path=%q", rawPath, r.URL.Path)
+					http.NotFound(w, r)
 					return
 				}
-			}
-			// SPA fallback: index.html for client-side routing
-			http.ServeFile(w, r, webDist+"/index.html")
+				// Block normalized paths that look like OS system paths.
+				// e.g. /uploads/../etc/passwd -> /etc/passwd (Go normalized it).
+				// Normal app paths like /assets, /uploads are handled by the SPA handler.
+				if r.URL.Path != "/" && strings.HasPrefix(r.URL.Path, string(os.PathSeparator)) {
+					for _, prefix := range []string{"/etc", "/var", "/usr", "/tmp", "/root", "/home", "/sys", "/proc", "/dev", "/boot"} {
+						if strings.HasPrefix(r.URL.Path, prefix) {
+							log.Printf("[MIDDLEWARE] BLOCKED system path: path=%q rawPath=%q", r.URL.Path, r.URL.RawPath)
+							http.NotFound(w, r)
+							return
+						}
+					}
+				}
+				// Strip leading "/" so that filepath.Join does not discard webDist.
+				// e.g. "/etc/passwd" -> "etc/passwd", "/assets/index.js" -> "assets/index.js", "/" -> "".
+				cleanLocal := clean
+				if strings.HasPrefix(cleanLocal, string(os.PathSeparator)) {
+					cleanLocal = cleanLocal[1:]
+				}
+				// Robust containment: Join + EvalSymlinks catches traversal like /uploads/../etc/passwd.
+				// Without EvalSymlinks, Join("/dist", "etc/passwd")="/dist/etc/passwd" (no .. left to resolve)
+				// and the simple HasPrefix check passes when it should not.
+				resolvedPath := filepath.Join(webDist, cleanLocal)
+				if absClean, err := filepath.EvalSymlinks(resolvedPath); err == nil {
+					resolvedPath = absClean
+				}
+				webDistAbs, _ := filepath.EvalSymlinks(webDist)
+				// Normalize both to remove trailing slashes before prefix check.
+				resolvedPath = filepath.Clean(resolvedPath)
+				webDistAbs = filepath.Clean(webDistAbs)
+				// Normalized both sides (Clean removed trailing /). Check: is resolvedPath inside webDistAbs?
+				if !strings.HasPrefix(resolvedPath, webDistAbs) || (resolvedPath != webDistAbs && !strings.HasPrefix(resolvedPath[len(webDistAbs):], "/")) {
+					log.Printf("[SPA] BLOCKED path traversal: resolved=%q not in webDist=%q", resolvedPath, webDistAbs)
+					http.NotFound(w, r)
+					return
+				}
+				// Serve real files as-is (assets, fonts, favicon, etc.);
+				// http.ServeFile returns 404 if the file doesn't exist.
+				info, err := os.Stat(resolvedPath)
+				if err == nil && !info.IsDir() {
+					http.ServeFile(w, r, resolvedPath)
+					return
+				}
+				// SPA fallback: index.html for client-side routing
+				http.ServeFile(w, r, webDist+"/index.html")
 		}))
 		log.Println("[SPA] serving built frontend from:", webDist, "at / (fallback)")
 	}
