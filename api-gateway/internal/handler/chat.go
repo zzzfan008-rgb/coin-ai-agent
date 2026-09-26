@@ -72,8 +72,7 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	isStream := req.Stream != nil && *req.Stream
-	log.Printf("[chat completions] model=%s stream=%v cookies=%v", req.Model, isStream, r.Cookies())
-	log.Printf("[chat completions] rustCoreURL=%s", h.chatSvc.RustCoreURL())
+	log.Printf("[chat completions] model=%s stream=%v", req.Model, isStream)
 
 	claims := middleware.GetClaims(r.Context())
 	userID, orgID, deptID, role := "", "", "", ""

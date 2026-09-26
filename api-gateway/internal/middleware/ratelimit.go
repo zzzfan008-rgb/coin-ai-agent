@@ -32,7 +32,7 @@ func (rl *RateLimiter) Middleware() func(http.Handler) http.Handler {
 				return
 			}
 
-			key := fmt.Sprintf("ratelimit:%s:%s", claims.OrgID, r.URL.Path)
+			key := fmt.Sprintf("ratelimit:%s:%s:%s", claims.OrgID, r.Method, r.URL.Path)
 			allowed, remaining, err := rl.Allow(ctx, key)
 			if err != nil {
 				// Fail open: log but don't block

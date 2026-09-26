@@ -158,7 +158,11 @@ func (h *UserHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	orgID, _ := parseUUID(claims.OrgID)
+	orgID, err := parseUUID(claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid org_id in token")
+		return
+	}
 	list, err := h.svc.List(r.Context(), orgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
@@ -184,7 +188,11 @@ func NewDeptHandler(svc *service.DeptService) *DeptHandler {
 // @Router /api/depts [get]
 func (h *DeptHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetClaims(r.Context())
-	orgID, _ := parseUUID(claims.OrgID)
+	orgID, err := parseUUID(claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid org_id in token")
+		return
+	}
 	list, err := h.svc.List(r.Context(), orgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
@@ -213,7 +221,11 @@ func (h *DeptHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	claims := middleware.GetClaims(r.Context())
-	orgID, _ := parseUUID(claims.OrgID)
+	orgID, err := parseUUID(claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid org_id in token")
+		return
+	}
 	dept, err := h.svc.Create(r.Context(), orgID, req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
@@ -239,7 +251,11 @@ func NewRoleHandler(svc *service.RoleService) *RoleHandler {
 // @Router /api/roles [get]
 func (h *RoleHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetClaims(r.Context())
-	orgID, _ := parseUUID(claims.OrgID)
+	orgID, err := parseUUID(claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid org_id in token")
+		return
+	}
 	list, err := h.svc.List(r.Context(), orgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
@@ -268,7 +284,11 @@ func (h *RoleHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	claims := middleware.GetClaims(r.Context())
-	orgID, _ := parseUUID(claims.OrgID)
+	orgID, err := parseUUID(claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid org_id in token")
+		return
+	}
 	role, err := h.svc.Create(r.Context(), orgID, req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
@@ -298,8 +318,16 @@ func NewSessionHandler(svc *service.SessionService, chatSvc *service.ChatService
 // @Router /api/sessions [get]
 func (h *SessionHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetClaims(r.Context())
-	orgID, _ := parseUUID(claims.OrgID)
-	userID, _ := parseUUID(claims.Subject)
+	orgID, err := parseUUID(claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid org_id in token")
+		return
+	}
+	userID, err := parseUUID(claims.Subject)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid user id in token")
+		return
+	}
 
 	archived := r.URL.Query().Get("archived") == "true"
 	limit := parseInt(r.URL.Query().Get("limit"), 20)
@@ -323,12 +351,27 @@ func (h *SessionHandler) List(w http.ResponseWriter, r *http.Request) {
 // @Router /api/sessions [post]
 func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req model.CreateSessionRequest
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body: "+err.Error())
+		return
+	}
 
 	claims := middleware.GetClaims(r.Context())
-	orgID, _ := parseUUID(claims.OrgID)
-	deptID, _ := parseUUID(claims.DeptID)
-	userID, _ := parseUUID(claims.Subject)
+	orgID, err := parseUUID(claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid org_id in token")
+		return
+	}
+	deptID, err := parseUUID(claims.DeptID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid dept_id in token")
+		return
+	}
+	userID, err := parseUUID(claims.Subject)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid user id in token")
+		return
+	}
 
 	session, err := h.svc.Create(r.Context(), orgID, deptID, userID, req)
 	if err != nil {
@@ -355,7 +398,11 @@ func (h *SessionHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	claims := middleware.GetClaims(r.Context())
-	orgID, _ := parseUUID(claims.OrgID)
+	orgID, err := parseUUID(claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid org_id in token")
+		return
+	}
 
 	session, err := h.svc.Get(r.Context(), orgID, sessionID)
 	if err != nil {
@@ -393,7 +440,11 @@ func (h *SessionHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	claims := middleware.GetClaims(r.Context())
-	orgID, _ := parseUUID(claims.OrgID)
+	orgID, err := parseUUID(claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid org_id in token")
+		return
+	}
 
 	session, err := h.svc.Update(r.Context(), orgID, sessionID, req)
 	if err != nil {
@@ -491,9 +542,21 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims := middleware.GetClaims(r.Context())
-	orgID, _ := parseUUID(claims.OrgID)
-	deptID, _ := parseUUID(claims.DeptID)
-	ownerID, _ := parseUUID(claims.Subject)
+	orgID, err := parseUUID(claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid org_id in token")
+		return
+	}
+	deptID, err := parseUUID(claims.DeptID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid dept_id in token")
+		return
+	}
+	ownerID, err := parseUUID(claims.Subject)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid user id in token")
+		return
+	}
 
 	proj, err := h.svc.Create(r.Context(), orgID, deptID, ownerID, req)
 	if err != nil {
@@ -512,8 +575,16 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 // @Router /api/projects [get]
 func (h *ProjectHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetClaims(r.Context())
-	orgID, _ := parseUUID(claims.OrgID)
-	deptID, _ := parseUUID(claims.DeptID)
+	orgID, err := parseUUID(claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid org_id in token")
+		return
+	}
+	deptID, err := parseUUID(claims.DeptID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid dept_id in token")
+		return
+	}
 	archived := r.URL.Query().Get("archived") == "true"
 
 	list, err := h.svc.List(r.Context(), orgID, deptID, archived)
@@ -540,7 +611,11 @@ func (h *ProjectHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims := middleware.GetClaims(r.Context())
-	deptID, _ := parseUUID(claims.DeptID)
+	deptID, err := parseUUID(claims.DeptID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid dept_id in token")
+		return
+	}
 
 	detail, err := h.svc.Get(r.Context(), deptID, projectID)
 	if err != nil {
@@ -576,7 +651,11 @@ func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims := middleware.GetClaims(r.Context())
-	deptID, _ := parseUUID(claims.DeptID)
+	deptID, err := parseUUID(claims.DeptID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid dept_id in token")
+		return
+	}
 
 	proj, err := h.svc.Update(r.Context(), deptID, projectID, req)
 	if err != nil {
@@ -604,7 +683,11 @@ func (h *ProjectHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims := middleware.GetClaims(r.Context())
-	deptID, _ := parseUUID(claims.DeptID)
+	deptID, err := parseUUID(claims.DeptID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid dept_id in token")
+		return
+	}
 
 	if err := h.svc.Delete(r.Context(), deptID, projectID); err != nil {
 		if errors.Is(err, service.ErrProjectNotFound) {
@@ -631,7 +714,11 @@ func (h *ProjectHandler) Archive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims := middleware.GetClaims(r.Context())
-	deptID, _ := parseUUID(claims.DeptID)
+	deptID, err := parseUUID(claims.DeptID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid dept_id in token")
+		return
+	}
 
 	proj, err := h.svc.Archive(r.Context(), deptID, projectID)
 	if err != nil {
@@ -659,7 +746,11 @@ func (h *ProjectHandler) Unarchive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims := middleware.GetClaims(r.Context())
-	deptID, _ := parseUUID(claims.DeptID)
+	deptID, err := parseUUID(claims.DeptID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid dept_id in token")
+		return
+	}
 
 	proj, err := h.svc.Unarchive(r.Context(), deptID, projectID)
 	if err != nil {
@@ -697,7 +788,11 @@ func (h *ProjectHandler) AddSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "session_id is required")
 		return
 	}
-	sessionID, _ := parseUUID(req.SessionID)
+	sessionID, err := parseUUID(req.SessionID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid session_id format")
+		return
+	}
 	if err := h.svc.AddSession(r.Context(), projectID, sessionID); err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
