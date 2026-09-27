@@ -637,6 +637,7 @@ pub async fn list_skills() -> Json<serde_json::Value> {
 }
 
 pub async fn execute_skill(
+    State(state): State<AppState>,
     Json(req): Json<SkillExecuteRequest>,
 ) -> Response {
     use crate::skill_engine::{check_skill_permission, execute_skill as exec_skill};
@@ -678,11 +679,17 @@ pub async fn execute_skill(
     }
 
     // Execute
-    let result = match exec_skill(&skill_meta, &req.tool_name, &req.parameters, &req.user_context).await {
+    let result = match exec_skill(
+        &skill_meta,
+        &req.tool_name,
+        &req.parameters,
+        &req.user_context,
+        Some(state.rag_retriever.as_ref()),
+    )
+    .await
+    {
         Ok(r) => r,
-        Err(e) => {
-            return crate::error::AppError::SkillError(e.to_string()).into_response()
-        }
+        Err(e) => return crate::error::AppError::SkillError(e.to_string()).into_response(),
     };
 
     Json(SkillExecuteResponse {

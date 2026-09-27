@@ -18,12 +18,13 @@ pub async fn execute_tool(
     arguments: &Value,
     user_ctx: &UserContext,
     store: &FashionStore,
+    rag: Option<&crate::rag::RagRetriever>,
 ) -> AppResult<String> {
     tracing::info!(tool = %tool_name, "Tool engine dispatch");
 
     let result = match tool_name {
         name if name.starts_with("skill_") => {
-            crate::skill_engine::route_tool_call(name, arguments, user_ctx, store).await
+            crate::skill_engine::route_tool_call(name, arguments, user_ctx, store, rag).await
         }
         name if name.starts_with("mcp_") => {
             let mcp_tool = name.strip_prefix("mcp_").unwrap_or(name);
@@ -31,9 +32,7 @@ pub async fn execute_tool(
         }
         // Bare or "mcp:"-style names are also handled by the skill router
         // (it forwards mcp: names to the MCP manager).
-        _ => {
-            crate::skill_engine::route_tool_call(tool_name, arguments, user_ctx, store).await
-        }
+        _ => crate::skill_engine::route_tool_call(tool_name, arguments, user_ctx, store, rag).await,
     };
 
     result

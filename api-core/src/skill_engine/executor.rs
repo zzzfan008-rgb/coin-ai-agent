@@ -67,6 +67,7 @@ pub async fn route_tool_call(
     arguments: &Value,
     user_ctx: &UserContext,
     _store: &FashionStore,
+    rag: Option<&crate::rag::RagRetriever>,
 ) -> Result<String> {
     // Unified PreToolCall gate — Casbin enforcement covering BOTH MCP and
     // skill tools before any routing/execution (fail-closed). The engine
@@ -117,7 +118,7 @@ pub async fn route_tool_call(
             .clone()
     };
 
-    let result = execute_skill(&skill_meta, &resolved_tool, arguments, user_ctx).await?;
+    let result = execute_skill(&skill_meta, &resolved_tool, arguments, user_ctx, rag).await?;
     Ok(serde_json::json!({
         "status": "ok",
         "skill": skill_id,
@@ -206,6 +207,7 @@ pub async fn execute_skill(
     tool_name: &str,
     arguments: &Value,
     user_ctx: &UserContext,
+    rag: Option<&crate::rag::RagRetriever>,
 ) -> Result<Value> {
     let store = FASHION_STORE
         .get()
@@ -397,7 +399,24 @@ pub async fn execute_skill(
             let fabrics = if query.is_empty() {
                 store.list_fabrics(org_id, dept_id, limit).await?
             } else {
-                store.search_fabrics(org_id, dept_id, &query, limit).await?
+                let semantic_query = query.clone();
+                let embedding = rag.map(|retriever| retriever.embed_text(&query));
+                search_fabrics_with_embedding(
+                    embedding,
+                    |vector| async move {
+                        store
+                            .search_fabrics_by_vector(
+                                org_id,
+                                dept_id,
+                                &semantic_query,
+                                &vector,
+                                limit,
+                            )
+                            .await
+                    },
+                    || store.search_fabrics(org_id, dept_id, &query, limit),
+                )
+                .await?
             };
 
             serde_json::json!({
@@ -1043,6 +1062,37 @@ pub async fn execute_skill(
     Ok(result)
 }
 
+/// Run a semantic fabric search when embedding is available; otherwise use the
+/// existing keyword search as a fallback.
+async fn search_fabrics_with_embedding<E, S, SFuture, K, KFuture, T>(
+    embedding: Option<E>,
+    semantic_search: S,
+    keyword_search: K,
+) -> Result<T>
+where
+    E: std::future::Future<Output = anyhow::Result<Vec<f32>>>,
+    S: FnOnce(Vec<f32>) -> SFuture,
+    SFuture: std::future::Future<Output = Result<T>>,
+    K: FnOnce() -> KFuture,
+    KFuture: std::future::Future<Output = Result<T>>,
+{
+    if let Some(embedding) = embedding {
+        match embedding.await {
+            Ok(vector) if crate::skill_engine::fashion_db::is_valid_fabric_embedding(&vector) => {
+                return semantic_search(vector).await;
+            }
+            Ok(_) => {
+                tracing::warn!("Fabric query embedding has an invalid dimension or non-finite values; falling back to keyword search");
+            }
+            Err(error) => {
+                tracing::warn!(%error, "Fabric query embedding failed; falling back to keyword search");
+            }
+        }
+    }
+
+    keyword_search().await
+}
+
 /// Parse org/dept UUIDs out of the request's user context.
 fn parse_ctx_uuids(user_ctx: &UserContext) -> Result<(Uuid, Uuid)> {
     let org_id = Uuid::parse_str(&user_ctx.org_id).map_err(|_| {
@@ -1056,6 +1106,8 @@ fn parse_ctx_uuids(user_ctx: &UserContext) -> Result<(Uuid, Uuid)> {
 
 #[cfg(test)]
 mod tests {
+    use super::search_fabrics_with_embedding;
+
     #[test]
     fn test_skill_id_lookup() {
         // Simulate the lookup map
@@ -1067,5 +1119,66 @@ mod tests {
         assert_eq!(lookup.get("fabric_query"), Some(&"fabric-query".to_string()));
         assert_eq!(lookup.get("color_matching"), Some(&"color-matching".to_string()));
         assert_eq!(lookup.get("style_inspiration"), Some(&"style-inspiration".to_string()));
+    }
+
+    #[tokio::test]
+    async fn embedding_failure_falls_back_to_keyword_search() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+
+        let embedding_called = Arc::new(AtomicBool::new(false));
+        let embedding_flag = Arc::clone(&embedding_called);
+        let keyword_called = Arc::new(AtomicBool::new(false));
+        let keyword_flag = Arc::clone(&keyword_called);
+        let embedding = async move {
+            embedding_flag.store(true, Ordering::SeqCst);
+            Err(anyhow::anyhow!("embedding service unavailable"))
+        };
+        let result = search_fabrics_with_embedding(
+            Some(embedding),
+            |_| async { Ok::<_, crate::error::AppError>("semantic".to_string()) },
+            move || async move {
+                keyword_flag.store(true, Ordering::SeqCst);
+                Ok::<_, crate::error::AppError>("keyword".to_string())
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result, "keyword");
+        assert!(embedding_called.load(Ordering::SeqCst));
+        assert!(keyword_called.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn successful_embedding_uses_semantic_search() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+
+        let semantic_called = Arc::new(AtomicBool::new(false));
+        let semantic_flag = Arc::clone(&semantic_called);
+        let keyword_called = Arc::new(AtomicBool::new(false));
+        let keyword_flag = Arc::clone(&keyword_called);
+        let result = search_fabrics_with_embedding(
+            Some(async { Ok::<_, anyhow::Error>(vec![0.25; 1024]) }),
+            move |vector| async move {
+                semantic_flag.store(vector.len() == 1024 && vector[0] == 0.25, Ordering::SeqCst);
+                Ok::<_, crate::error::AppError>("semantic".to_string())
+            },
+            move || async move {
+                keyword_flag.store(true, Ordering::SeqCst);
+                Ok::<_, crate::error::AppError>("keyword".to_string())
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result, "semantic");
+        assert!(semantic_called.load(Ordering::SeqCst));
+        assert!(!keyword_called.load(Ordering::SeqCst));
     }
 }

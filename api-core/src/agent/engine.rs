@@ -119,7 +119,7 @@ impl AgentEngine {
             let tool_results = futures::future::join_all(
                 tool_calls
                     .iter()
-                    .map(|tc| execute_single_tool(tc, user_ctx)),
+                    .map(|tc| execute_single_tool(tc, user_ctx, self.rag.as_deref())),
             )
             .await;
 
@@ -181,7 +181,11 @@ struct ToolResult {
 }
 
 /// Authorization hook + tool dispatch for a single LLM tool call.
-async fn execute_single_tool(tool_call: &ToolCall, user_ctx: &UserContext) -> Result<ToolResult> {
+async fn execute_single_tool(
+    tool_call: &ToolCall,
+    user_ctx: &UserContext,
+    rag: Option<&rag::RagRetriever>,
+) -> Result<ToolResult> {
     let tool_name = tool_call.function.name.clone();
     let arguments: serde_json::Value =
         serde_json::from_str(&tool_call.function.arguments).unwrap_or(serde_json::json!({}));
@@ -193,7 +197,7 @@ async fn execute_single_tool(tool_call: &ToolCall, user_ctx: &UserContext) -> Re
     let store = crate::skill_engine::FASHION_STORE
         .get()
         .ok_or_else(|| AppError::Internal("FashionStore not initialised".into()))?;
-    let content = crate::tool::execute_tool(&tool_name, &arguments, user_ctx, store).await?;
+    let content = crate::tool::execute_tool(&tool_name, &arguments, user_ctx, store, rag).await?;
 
     Ok(ToolResult {
         tool_call_id: tool_call.id.clone(),

@@ -11,6 +11,48 @@ use uuid::Uuid;
 
 use crate::error::{AppError, Result};
 
+const FABRIC_EMBEDDING_DIM: usize = 1024;
+
+const FABRIC_VECTOR_SEARCH_SQL: &str = r#"
+    SELECT id, org_id, dept_id, name, composition, weight_gm2,
+           season, applicable_styles, care_instructions, features,
+           image_url, pantone_codes, description, created_at
+    FROM fabrics
+    WHERE org_id = $1 AND dept_id = $2
+      AND (
+          name ILIKE $3
+          OR composition ILIKE $3
+          OR (
+              description_embedding IS NOT NULL
+              AND (description_embedding <=> $4::vector) < 0.3
+          )
+      )
+    ORDER BY
+      CASE WHEN name ILIKE $3 OR composition ILIKE $3 THEN 0 ELSE 1 END,
+      description_embedding <=> $4::vector ASC,
+      created_at DESC
+    LIMIT $5
+"#;
+
+pub(crate) fn is_valid_fabric_embedding(embedding: &[f32]) -> bool {
+    embedding.len() == FABRIC_EMBEDDING_DIM && embedding.iter().all(|value| value.is_finite())
+}
+
+fn pgvector_literal(embedding: &[f32]) -> Result<String> {
+    if !is_valid_fabric_embedding(embedding) {
+        return Err(AppError::BadRequest(format!(
+            "Fabric embedding must contain {FABRIC_EMBEDDING_DIM} finite values"
+        )));
+    }
+
+    let values = embedding
+        .iter()
+        .map(f32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    Ok(format!("[{values}]"))
+}
+
 /// Shared pool handle for fashion tables.
 #[derive(Clone)]
 pub struct FashionStore {
@@ -36,7 +78,7 @@ impl FashionStore {
         let rows = sqlx::query(
             r#"SELECT id, org_id, dept_id, name, composition, weight_gm2,
                       season, applicable_styles, care_instructions, features,
-                      created_at
+                      image_url, pantone_codes, description, created_at
                FROM fabrics
                WHERE org_id = $1 AND dept_id = $2
                  AND (name ILIKE $3 OR composition ILIKE $3)
@@ -53,6 +95,29 @@ impl FashionStore {
         Ok(rows.iter().map(Fabric::from_row).collect())
     }
 
+    /// Search by pgvector cosine distance while retaining direct keyword hits.
+    pub async fn search_fabrics_by_vector(
+        &self,
+        org_id: Uuid,
+        dept_id: Uuid,
+        query: &str,
+        embedding: &[f32],
+        limit: i64,
+    ) -> Result<Vec<Fabric>> {
+        let pattern = format!("%{query}%");
+        let vector = pgvector_literal(embedding)?;
+        let rows = sqlx::query(FABRIC_VECTOR_SEARCH_SQL)
+            .bind(org_id)
+            .bind(dept_id)
+            .bind(pattern)
+            .bind(vector)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(rows.iter().map(Fabric::from_row).collect())
+    }
+
     /// List all fabrics for an org/dept.
     pub async fn list_fabrics(
         &self,
@@ -63,7 +128,7 @@ impl FashionStore {
         let rows = sqlx::query(
             r#"SELECT id, org_id, dept_id, name, composition, weight_gm2,
                       season, applicable_styles, care_instructions, features,
-                      created_at
+                      image_url, pantone_codes, description, created_at
                FROM fabrics
                WHERE org_id = $1 AND dept_id = $2
                ORDER BY created_at DESC
@@ -88,7 +153,7 @@ impl FashionStore {
         let rows = sqlx::query(
             r#"SELECT id, org_id, dept_id, name, composition, weight_gm2,
                       season, applicable_styles, care_instructions, features,
-                      created_at
+                      image_url, pantone_codes, description, created_at
                FROM fabrics
                WHERE org_id = $1 AND dept_id = $2
                  AND (season = $3 OR season = 'all-season')
@@ -108,7 +173,7 @@ impl FashionStore {
         let row = sqlx::query(
             r#"SELECT id, org_id, dept_id, name, composition, weight_gm2,
                       season, applicable_styles, care_instructions, features,
-                      created_at
+                      image_url, pantone_codes, description, created_at
                FROM fabrics
                WHERE id = $1 AND org_id = $2 AND dept_id = $3"#,
         )
@@ -549,6 +614,9 @@ pub struct Fabric {
     pub applicable_styles: Vec<String>,
     pub care_instructions: Option<String>,
     pub features: Option<String>,
+    pub image_url: Option<String>,
+    pub pantone_codes: Option<String>,
+    pub description: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -567,6 +635,9 @@ impl Fabric {
                 .unwrap_or_default(),
             care_instructions: row.get("care_instructions"),
             features: row.get("features"),
+            image_url: row.get("image_url"),
+            pantone_codes: row.get("pantone_codes"),
+            description: row.get("description"),
             created_at: row.get("created_at"),
         }
     }
@@ -708,5 +779,54 @@ impl Style {
                 .unwrap_or_default(),
             created_at: row.get("created_at"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Fabric, FABRIC_VECTOR_SEARCH_SQL};
+
+    #[test]
+    fn fabric_serialization_exposes_search_metadata() {
+        let fabric = Fabric {
+            id: uuid::Uuid::nil(),
+            org_id: uuid::Uuid::nil(),
+            dept_id: uuid::Uuid::nil(),
+            name: "Cotton voile".into(),
+            composition: Some("100% cotton".into()),
+            weight_gm2: Some(90),
+            season: Some("summer".into()),
+            applicable_styles: vec![],
+            care_instructions: None,
+            features: None,
+            image_url: Some("https://example.test/voile.jpg".into()),
+            pantone_codes: Some("11-0601 TCX".into()),
+            description: Some("Lightweight breathable cotton voile".into()),
+            created_at: chrono::Utc::now(),
+        };
+
+        let value = serde_json::to_value(fabric).unwrap();
+        assert_eq!(value["image_url"], "https://example.test/voile.jpg");
+        assert_eq!(value["pantone_codes"], "11-0601 TCX");
+        assert_eq!(value["description"], "Lightweight breathable cotton voile");
+    }
+
+    #[test]
+    fn vector_search_is_tenant_scoped_and_promotes_keyword_hits() {
+        let sql = FABRIC_VECTOR_SEARCH_SQL;
+
+        assert!(sql.contains("WHERE org_id = $1"));
+        assert!(sql.contains("AND dept_id = $2"));
+        assert!(sql.contains("name ILIKE $3 OR composition ILIKE $3"));
+        assert!(sql.contains("$4::vector"));
+
+        let order_by = sql.split_once("ORDER BY").unwrap().1;
+        let keyword_priority = order_by
+            .find("CASE WHEN name ILIKE $3 OR composition ILIKE $3 THEN 0 ELSE 1 END")
+            .unwrap();
+        let semantic_distance = order_by
+            .find("description_embedding <=> $4::vector")
+            .unwrap();
+        assert!(keyword_priority < semantic_distance);
     }
 }
