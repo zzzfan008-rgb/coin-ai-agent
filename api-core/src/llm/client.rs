@@ -90,7 +90,14 @@ impl LlmClient {
             );
         }
 
-        Ok(Self { http, default_provider, minimax, deepseek, qwen, timeout_secs })
+        Ok(Self {
+            http,
+            default_provider,
+            minimax,
+            deepseek,
+            qwen,
+            timeout_secs,
+        })
     }
 
     /// Return the provider and model to use for a given model name.
@@ -203,7 +210,8 @@ impl LlmClient {
                 let delay_ms = 1000 * 2u64.pow(attempt - 1);
                 tracing::warn!(
                     "LLM 429 (attempt {}/3), backing off {}ms before retry",
-                    attempt, delay_ms
+                    attempt,
+                    delay_ms
                 );
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                 continue;
@@ -352,10 +360,7 @@ impl LlmClient {
             "deepseek".to_string(),
             self.health_check_provider("deepseek").await,
         );
-        result.insert(
-            "qwen".to_string(),
-            self.health_check_provider("qwen").await,
-        );
+        result.insert("qwen".to_string(), self.health_check_provider("qwen").await);
         result
     }
 }

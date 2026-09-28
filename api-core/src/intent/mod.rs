@@ -89,7 +89,10 @@ impl IntentRouter {
         if path.exists() {
             Self::load_rules(&path.to_string_lossy())
         } else {
-            tracing::warn!("Intent rules file not found at {:?}, falling back to embedded rules", path);
+            tracing::warn!(
+                "Intent rules file not found at {:?}, falling back to embedded rules",
+                path
+            );
             Self::embedded()
         }
     }
@@ -142,7 +145,11 @@ impl IntentRouter {
                     .filter(|kw| !kw.is_empty() && haystack.contains(&kw.to_lowercase()))
                     .cloned()
                     .collect();
-                if hits.is_empty() { None } else { Some((hits.len(), r, hits)) }
+                if hits.is_empty() {
+                    None
+                } else {
+                    Some((hits.len(), r, hits))
+                }
             })
             .collect();
 
@@ -287,7 +294,10 @@ mod tests {
         let r = router().classify("蓝色配什么颜色好看");
         assert_eq!(r.intent, "color");
         assert_eq!(r.skill_id.as_deref(), Some("color-matching"));
-        assert!(r.matched_keywords.iter().any(|k| k.contains("颜色") || k == "色"));
+        assert!(r
+            .matched_keywords
+            .iter()
+            .any(|k| k.contains("颜色") || k == "色"));
     }
 
     #[test]
@@ -322,10 +332,7 @@ mod tests {
 
     #[test]
     fn parse_rules_adds_general_fallback() {
-        let rules = parse_rules(
-            "- intent: x\n  skill: x-skill\n  keywords: [foo]\n",
-        )
-        .unwrap();
+        let rules = parse_rules("- intent: x\n  skill: x-skill\n  keywords: [foo]\n").unwrap();
         assert!(rules.iter().any(|r| r.intent == "general"));
     }
 

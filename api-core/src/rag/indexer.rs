@@ -76,10 +76,8 @@ impl DocumentIndexer {
                 Ok(vector) => {
                     // Deterministic point ID so re-indexing replaces rather
                     // than duplicates. Qdrant requires UUID or unsigned int.
-                    let point_id = Uuid::new_v5(
-                        &Uuid::NAMESPACE_OID,
-                        format!("{doc_id}:{i}").as_bytes(),
-                    );
+                    let point_id =
+                        Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("{doc_id}:{i}").as_bytes());
 
                     batch.push(QdrantChunk {
                         id: point_id.to_string(),
@@ -137,7 +135,13 @@ impl DocumentIndexer {
         .execute(pool)
         .await?;
 
-        tracing::info!(doc_id, status, indexed, total_chunks, "Document indexing complete");
+        tracing::info!(
+            doc_id,
+            status,
+            indexed,
+            total_chunks,
+            "Document indexing complete"
+        );
         Ok(indexed)
     }
 
@@ -181,7 +185,11 @@ impl DocumentIndexer {
 
         if chars.len() <= chunk_chars {
             let trimmed: String = chars.iter().collect::<String>().trim().to_string();
-            return if trimmed.is_empty() { Vec::new() } else { vec![trimmed] };
+            return if trimmed.is_empty() {
+                Vec::new()
+            } else {
+                vec![trimmed]
+            };
         }
 
         let mut chunks = Vec::new();

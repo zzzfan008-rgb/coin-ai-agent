@@ -14,38 +14,20 @@ pub fn routes() -> Router<AppState> {
         // Health
         .route("/health", get(handlers::health))
         // Chat
-        .route(
-            "/v1/chat/completions",
-            post(handlers::chat_completions),
-        )
-        .route(
-            "/v1/chat/completions/stream",
-            post(handlers::chat_stream),
-        )
+        .route("/v1/chat/completions", post(handlers::chat_completions))
+        .route("/v1/chat/completions/stream", post(handlers::chat_stream))
         // Image upload for chat (e.g. dreamina image2image)
         .route("/v1/chat/upload-image", post(handlers::upload_chat_image))
         // Sessions
-        .route(
-            "/internal/sessions",
-            post(handlers::create_session),
-        )
-        .route(
-            "/internal/sessions/:id",
-            get(handlers::get_session),
-        )
+        .route("/internal/sessions", post(handlers::create_session))
+        .route("/internal/sessions/:id", get(handlers::get_session))
         .route(
             "/internal/sessions/:id/messages",
             get(handlers::get_messages).post(handlers::save_message),
         )
         // Skills
-        .route(
-            "/internal/skills/list",
-            get(handlers::list_skills),
-        )
-        .route(
-            "/internal/skills/execute",
-            post(handlers::execute_skill),
-        )
+        .route("/internal/skills/list", get(handlers::list_skills))
+        .route("/internal/skills/execute", post(handlers::execute_skill))
         // Knowledge base (RAG)
         .route(
             "/internal/knowledge/search",
@@ -53,8 +35,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/api/knowledge/documents",
-            post(handlers::upload_knowledge_document)
-                .get(handlers::list_knowledge_documents),
+            post(handlers::upload_knowledge_document).get(handlers::list_knowledge_documents),
         )
         .route(
             "/api/knowledge/documents/:id",
@@ -63,15 +44,9 @@ pub fn routes() -> Router<AppState> {
                 .delete(handlers::delete_knowledge_document),
         )
         // Intent classification (T-014)
-        .route(
-            "/internal/intent/classify",
-            post(handlers::intent_classify),
-        )
+        .route("/internal/intent/classify", post(handlers::intent_classify))
         // MCP servers
-        .route(
-            "/api/mcp/servers",
-            get(handlers::mcp_servers),
-        )
+        .route("/api/mcp/servers", get(handlers::mcp_servers))
         .route(
             "/api/mcp/servers/:id/tools",
             get(handlers::mcp_server_tools),

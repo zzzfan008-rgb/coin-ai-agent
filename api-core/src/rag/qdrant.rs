@@ -76,7 +76,10 @@ impl QdrantStore {
 
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
-            bail!("Failed to create Qdrant collection '{}': {text}", self.collection);
+            bail!(
+                "Failed to create Qdrant collection '{}': {text}",
+                self.collection
+            );
         }
 
         tracing::info!(collection = %self.collection, "Created Qdrant collection");
@@ -222,8 +225,10 @@ impl QdrantStore {
             return Ok(Vec::new());
         }
 
-        let envelope: QdrantEnvelope<Vec<QdrantSearchResult>> =
-            resp.json().await.context("Failed to decode Qdrant search response")?;
+        let envelope: QdrantEnvelope<Vec<QdrantSearchResult>> = resp
+            .json()
+            .await
+            .context("Failed to decode Qdrant search response")?;
 
         Ok(envelope.result)
     }

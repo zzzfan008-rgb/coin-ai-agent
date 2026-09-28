@@ -66,8 +66,7 @@ pub async fn pre_tool_call_check(
             )))
         }
         Err(AppError::Internal(msg)) if msg.contains("RBAC service not initialised") => {
-            PermissionChecker::default()
-                .authorize(&user_ctx.role, tool_name, parameters)
+            PermissionChecker::default().authorize(&user_ctx.role, tool_name, parameters)
         }
         Err(e) => Err(e),
     }

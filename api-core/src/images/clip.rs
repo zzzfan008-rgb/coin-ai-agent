@@ -182,7 +182,11 @@ pub fn parse_dashscope_embedding(json: &Value) -> Result<Vec<f32>> {
 /// shapes. See module docs.
 pub fn parse_embedding(json: &Value) -> Result<Vec<f32>> {
     // 1. OpenAI/Jina style: data[0].embedding
-    if let Some(v) = json.get("data").and_then(|d| d.as_array()).and_then(|a| a.first()) {
+    if let Some(v) = json
+        .get("data")
+        .and_then(|d| d.as_array())
+        .and_then(|a| a.first())
+    {
         if let Some(emb) = v.get("embedding") {
             return json_to_vec(emb);
         }
@@ -195,11 +199,7 @@ pub fn parse_embedding(json: &Value) -> Result<Vec<f32>> {
     if let Some(out) = json.get("output") {
         if out.is_array() {
             // Nested [[..]] → take first vector.
-            let candidate = if out
-                .get(0)
-                .map(|v| v.is_array())
-                .unwrap_or(false)
-            {
+            let candidate = if out.get(0).map(|v| v.is_array()).unwrap_or(false) {
                 out.get(0).unwrap()
             } else {
                 out
@@ -236,8 +236,7 @@ fn json_to_vec(v: &Value) -> Result<Vec<f32>> {
 
 // ── Minimal base64 helpers (avoid pulling the base64 crate for this alone) ──
 
-const B64_ALPHABET: &[u8; 64] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const B64_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// Standard-alphabet base64 encoder (with padding).
 pub fn base64_encode(input: &[u8]) -> String {
@@ -273,9 +272,8 @@ pub fn base64_decode(input: &str) -> Result<Vec<u8>> {
         _ => input,
     };
 
-    let lookup = |c: u8| -> Option<u32> {
-        B64_ALPHABET.iter().position(|a| *a == c).map(|p| p as u32)
-    };
+    let lookup =
+        |c: u8| -> Option<u32> { B64_ALPHABET.iter().position(|a| *a == c).map(|p| p as u32) };
 
     let clean: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
     let mut out = Vec::with_capacity(clean.len() * 3 / 4);

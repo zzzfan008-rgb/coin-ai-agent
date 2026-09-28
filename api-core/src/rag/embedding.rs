@@ -25,7 +25,11 @@ pub struct EmbeddingService {
 
 impl EmbeddingService {
     /// Build an embedding service from explicit parts.
-    pub fn new(api_key: impl Into<String>, base_url: impl Into<String>, model: impl Into<String>) -> Self {
+    pub fn new(
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
         let base = base_url.into().trim_end_matches('/').to_string();
         Self {
             http: Client::builder()

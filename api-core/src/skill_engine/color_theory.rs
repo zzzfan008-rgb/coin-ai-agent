@@ -54,7 +54,11 @@ pub fn hex_to_rgb(hex: &str) -> Option<(u8, u8, u8)> {
         _ => return None,
     };
     let n = u32::from_str_radix(&h, 16).ok()?;
-    Some((((n >> 16) & 255) as u8, ((n >> 8) & 255) as u8, (n & 255) as u8))
+    Some((
+        ((n >> 16) & 255) as u8,
+        ((n >> 8) & 255) as u8,
+        (n & 255) as u8,
+    ))
 }
 
 pub fn rgb_to_hex(r: u8, g: u8, b: u8) -> String {
@@ -118,7 +122,11 @@ pub fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
 /// Smallest signed difference between two hues on the 0..360 wheel.
 fn hue_delta(a: f64, b: f64) -> f64 {
     let d = (a - b).rem_euclid(360.0);
-    if d > 180.0 { d - 360.0 } else { d }
+    if d > 180.0 {
+        d - 360.0
+    } else {
+        d
+    }
 }
 
 /// Build a color-wheel palette around `primary_hex`.
@@ -137,7 +145,11 @@ pub fn build_palette(primary_hex: &str, scheme: &str) -> ColorPalette {
         role: role.to_string(),
     };
 
-    let primary_entry = PaletteColor { hex: primary.clone(), name: "主色".into(), role: "primary".into() };
+    let primary_entry = PaletteColor {
+        hex: primary.clone(),
+        name: "主色".into(),
+        role: "primary".into(),
+    };
 
     // (extra colors, score, tips) per scheme
     let (extra, score, tips): (Vec<PaletteColor>, i32, &str) = match scheme {

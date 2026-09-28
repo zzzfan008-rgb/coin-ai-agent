@@ -186,7 +186,11 @@ impl RagRetriever {
         );
         let store = QdrantStore::new(&config.qdrant_url, &config.qdrant_collection);
 
-        Self { embedding, store, config }
+        Self {
+            embedding,
+            store,
+            config,
+        }
     }
 
     /// Embed a single piece of text.
@@ -196,7 +200,9 @@ impl RagRetriever {
 
     /// Create the Qdrant collection on startup if missing.
     pub async fn ensure_collection(&self) -> Result<()> {
-        self.store.ensure_collection(self.config.embedding_dim).await
+        self.store
+            .ensure_collection(self.config.embedding_dim)
+            .await
     }
 
     /// Upsert a batch of embedded chunks.

@@ -350,12 +350,7 @@ impl FashionStore {
     // ── Fabric → styles ────────────────────────────────────────────────────────
 
     /// Get a single style by ID.
-    pub async fn get_style(
-        &self,
-        org_id: Uuid,
-        dept_id: Uuid,
-        style_id: Uuid,
-    ) -> Result<Style> {
+    pub async fn get_style(&self, org_id: Uuid, dept_id: Uuid, style_id: Uuid) -> Result<Style> {
         let row = sqlx::query(
             r#"SELECT id, org_id, dept_id, name, description, silhouette,
                       garment_type, key_features, suitable_seasons, target_audience,
@@ -522,7 +517,9 @@ impl FashionStore {
                FROM styles
                WHERE org_id = "#,
         );
-        qb.push_bind(org_id).push(" AND dept_id = ").push_bind(dept_id);
+        qb.push_bind(org_id)
+            .push(" AND dept_id = ")
+            .push_bind(dept_id);
 
         if !keywords.is_empty() {
             qb.push(" AND (");
@@ -544,7 +541,8 @@ impl FashionStore {
         }
 
         if let Some(gt) = garment_type.filter(|g| !g.is_empty() && *g != "general") {
-            qb.push(" AND garment_type ILIKE ").push_bind(format!("%{gt}%"));
+            qb.push(" AND garment_type ILIKE ")
+                .push_bind(format!("%{gt}%"));
         }
 
         qb.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit);
@@ -702,7 +700,10 @@ pub struct StyleIdea {
 
 impl StyleIdea {
     fn from_style(style: Style, matched_keywords: Vec<String>) -> Self {
-        Self { style, matched_keywords }
+        Self {
+            style,
+            matched_keywords,
+        }
     }
 }
 
@@ -716,11 +717,7 @@ pub struct StyleVariation {
 }
 
 /// Build `count` style variations of the given base style.
-fn build_style_variations(
-    base: &Style,
-    variation_type: &str,
-    count: i64,
-) -> Vec<StyleVariation> {
+fn build_style_variations(base: &Style, variation_type: &str, count: i64) -> Vec<StyleVariation> {
     let prefixes = match variation_type {
         "silhouette" => &["A-line 版", "H-line 版", "Oversize 版", "修身版"][..],
         "season" => &["春夏款", "秋冬款", "四季款", "季中款"][..],

@@ -46,5 +46,6 @@ async fn execute_mcp_tool(mcp_tool: &str, args: &Value) -> AppResult<String> {
         "mcp_tool": mcp_tool,
         "args": args,
         "message": "MCP tool stub — Phase 1B"
-    }).to_string())
+    })
+    .to_string())
 }

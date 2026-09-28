@@ -34,9 +34,11 @@ impl ToolRegistry {
 
     /// Get tool spec by the unqualified tool name only (assumes name is unique).
     pub fn get_by_name(&self, tool_name: &str) -> Option<(&str, &ToolSpec)> {
-        self.by_tool_name
-            .get(tool_name)
-            .and_then(|sid| self.by_id.get(&format!("{sid}:{tool_name}")).map(|t| (sid.as_str(), t)))
+        self.by_tool_name.get(tool_name).and_then(|sid| {
+            self.by_id
+                .get(&format!("{sid}:{tool_name}"))
+                .map(|t| (sid.as_str(), t))
+        })
     }
 
     /// Returns all tool names.
@@ -46,7 +48,10 @@ impl ToolRegistry {
 
     /// Build OpenAI `ToolDefinition` list from all registered tools.
     pub fn to_llm_tools(&self) -> Vec<ToolDefinition> {
-        self.by_id.values().map(|t| tool_spec_to_definition(&t.name, t)).collect()
+        self.by_id
+            .values()
+            .map(|t| tool_spec_to_definition(&t.name, t))
+            .collect()
     }
 
     /// Build tool definitions only for the given skill ids, with fully
@@ -68,7 +73,11 @@ impl ToolRegistry {
     }
 
     /// Build OpenAI `ToolDefinition` for a single skill.
-    pub fn to_llm_tools_for_skill(&self, _skill_id: &str, skill: &SkillMetadata) -> Vec<ToolDefinition> {
+    pub fn to_llm_tools_for_skill(
+        &self,
+        _skill_id: &str,
+        skill: &SkillMetadata,
+    ) -> Vec<ToolDefinition> {
         skill
             .tools
             .iter()
@@ -87,16 +96,25 @@ fn tool_spec_to_definition(name: &str, spec: &ToolSpec) -> ToolDefinition {
         .iter()
         .map(|p| {
             let mut obj = serde_json::Map::new();
-            obj.insert("type".to_string(), serde_json::Value::String(p.param_type.clone()));
+            obj.insert(
+                "type".to_string(),
+                serde_json::Value::String(p.param_type.clone()),
+            );
             // JSON Schema requires `items` for array types; our SKILL.md specs
             // only declare element type implicitly (string arrays), so fill it in.
             if p.param_type == "array" {
                 let mut items = serde_json::Map::new();
-                items.insert("type".to_string(), serde_json::Value::String("string".to_string()));
+                items.insert(
+                    "type".to_string(),
+                    serde_json::Value::String("string".to_string()),
+                );
                 obj.insert("items".to_string(), serde_json::Value::Object(items));
             }
             if let Some(ref desc) = p.description {
-                obj.insert("description".to_string(), serde_json::Value::String(desc.clone()));
+                obj.insert(
+                    "description".to_string(),
+                    serde_json::Value::String(desc.clone()),
+                );
             }
             if let Some(ref defaults) = p.default {
                 obj.insert("default".to_string(), defaults.clone());
@@ -105,7 +123,10 @@ fn tool_spec_to_definition(name: &str, spec: &ToolSpec) -> ToolDefinition {
                 obj.insert(
                     "enum".to_string(),
                     serde_json::Value::Array(
-                        enum_vals.iter().map(|v| serde_json::Value::String(v.clone())).collect(),
+                        enum_vals
+                            .iter()
+                            .map(|v| serde_json::Value::String(v.clone()))
+                            .collect(),
                     ),
                 );
             }

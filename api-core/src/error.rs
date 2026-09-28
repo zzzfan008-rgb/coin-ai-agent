@@ -57,25 +57,47 @@ impl IntoResponse for AppError {
             AppError::LlmError(msg) => (StatusCode::BAD_GATEWAY, "LLM_ERROR", msg.clone()),
             AppError::DbError(e) => {
                 tracing::error!("Database error: {e}");
-                (StatusCode::INTERNAL_SERVER_ERROR, "DATABASE_ERROR", "Database error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DATABASE_ERROR",
+                    "Database error".to_string(),
+                )
             }
             AppError::RedisError(e) => {
                 tracing::error!("Redis error: {e}");
-                (StatusCode::INTERNAL_SERVER_ERROR, "REDIS_ERROR", "Cache error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "REDIS_ERROR",
+                    "Cache error".to_string(),
+                )
             }
             AppError::HttpError(e) => {
                 tracing::error!("HTTP error: {e}");
-                (StatusCode::BAD_GATEWAY, "HTTP_ERROR", "Upstream error".to_string())
+                (
+                    StatusCode::BAD_GATEWAY,
+                    "HTTP_ERROR",
+                    "Upstream error".to_string(),
+                )
             }
             AppError::Internal(msg) => {
                 tracing::error!("Internal error: {msg}");
-                (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", msg.clone())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "INTERNAL_ERROR",
+                    msg.clone(),
+                )
             }
-            AppError::SkillError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "SKILL_ERROR", msg.clone()),
+            AppError::SkillError(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "SKILL_ERROR",
+                msg.clone(),
+            ),
             AppError::CasbinError(msg) => (StatusCode::FORBIDDEN, "CASBIN_ERROR", msg.clone()),
-            AppError::SerializationError(e) => {
-                (StatusCode::UNPROCESSABLE_ENTITY, "SERIALIZATION_ERROR", e.to_string())
-            }
+            AppError::SerializationError(e) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "SERIALIZATION_ERROR",
+                e.to_string(),
+            ),
         };
 
         let body = Json(json!({

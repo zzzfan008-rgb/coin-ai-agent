@@ -140,9 +140,8 @@ impl RbacService {
 /// i.e. the gate is fail-closed.
 pub fn enforce_skill(user_ctx: &UserContext, skill_id: &str) -> Result<()> {
     let resource = format!("skill:{skill_id}");
-    let rbac = service().ok_or_else(|| {
-        AppError::Internal("RBAC service not initialised".to_string())
-    })?;
+    let rbac =
+        service().ok_or_else(|| AppError::Internal("RBAC service not initialised".to_string()))?;
 
     if rbac.check_permission(
         &user_ctx.user_id,
@@ -172,9 +171,8 @@ pub fn enforce_skill(user_ctx: &UserContext, skill_id: &str) -> Result<()> {
 pub fn enforce_tool(user_ctx: &UserContext, tool_name: &str) -> Result<()> {
     let (resource, action, _audit_action) = tool_resource(tool_name)?;
 
-    let rbac = service().ok_or_else(|| {
-        AppError::Internal("RBAC service not initialised".to_string())
-    })?;
+    let rbac =
+        service().ok_or_else(|| AppError::Internal("RBAC service not initialised".to_string()))?;
 
     let allowed = rbac.check_permission(
         &user_ctx.user_id,
@@ -205,8 +203,8 @@ fn tool_resource(tool_name: &str) -> Result<(String, &'static str, &'static str)
         }
         Ok((format!("mcp:{rest}"), "invoke", "mcp_call"))
     } else {
-        let (skill_id, _remote_tool) =
-            crate::skill_engine::executor::resolve_tool_owner(tool_name).ok_or_else(|| {
+        let (skill_id, _remote_tool) = crate::skill_engine::executor::resolve_tool_owner(tool_name)
+            .ok_or_else(|| {
                 AppError::NotFound(format!("Could not resolve tool name: {tool_name}"))
             })?;
         Ok((format!("skill:{skill_id}"), "execute", "skill_call"))

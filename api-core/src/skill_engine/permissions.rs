@@ -22,10 +22,7 @@ use crate::skill_engine::SkillMetadata;
 /// The user's permission set is read from `UserContext` — in Phase 1B we
 /// extract it from the `permissions` field; Phase 2 will read from JWT
 /// claims or a DB lookup.
-pub fn check_skill_permission(
-    user_ctx: &UserContext,
-    skill_meta: &SkillMetadata,
-) -> Result<()> {
+pub fn check_skill_permission(user_ctx: &UserContext, skill_meta: &SkillMetadata) -> Result<()> {
     let required = format!("skill:{}", skill_meta.id);
 
     // Prefer real Casbin enforcement when the enforcer is initialised (T-017).
@@ -54,11 +51,7 @@ pub fn check_skill_permission(
     }
 
     // Build the user's permission set from extra_permissions.
-    let user_permissions: HashSet<String> = user_ctx
-        .extra_permissions
-        .iter()
-        .cloned()
-        .collect();
+    let user_permissions: HashSet<String> = user_ctx.extra_permissions.iter().cloned().collect();
 
     if user_permissions.contains(&required) {
         tracing::debug!(

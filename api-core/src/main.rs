@@ -11,20 +11,20 @@
 // Phase 1B; allow their currently-unreachable items.
 #![allow(dead_code)]
 
+mod agent;
+mod api;
 mod config;
 mod error;
-mod api;
-mod llm;
-mod agent;
-mod tool;
-mod skill_engine;
-mod mcp;
-mod rag;
 mod images;
-mod session;
-mod middleware;
-mod rbac;
 mod intent;
+mod llm;
+mod mcp;
+mod middleware;
+mod rag;
+mod rbac;
+mod session;
+mod skill_engine;
+mod tool;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -38,9 +38,9 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use crate::config::AppConfig;
+use crate::images::ImageSearchService;
 use crate::llm::LlmClient;
 use crate::rag::{RagConfig, RagRetriever};
-use crate::images::ImageSearchService;
 use crate::rbac::RbacService;
 use crate::session::SessionStore;
 
@@ -86,8 +86,7 @@ fn resolve_skills_dir() -> std::path::PathBuf {
 async fn main() -> Result<()> {
     // ── Logging ──────────────────────────────────────────────────────────────
     let config = AppConfig::load()?;
-    let filter = EnvFilter::try_new(&config.log_level)
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_new(&config.log_level).unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::registry()
         .with(filter)
         .with(tracing_subscriber::fmt::layer().with_ansi(false))
@@ -129,7 +128,11 @@ async fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to load skill engine: {e}"))?;
 
     let skill_ids: Vec<_> = engine.loader.skill_ids();
-    tracing::info!("Skill engine loaded: {} skills ({:?})", skill_ids.len(), skill_ids);
+    tracing::info!(
+        "Skill engine loaded: {} skills ({:?})",
+        skill_ids.len(),
+        skill_ids
+    );
 
     {
         let mut global = crate::skill_engine::SKILL_ENGINE
@@ -206,7 +209,9 @@ async fn main() -> Result<()> {
     if image_search.configured() {
         tracing::info!("CLIP client ready (model={})", image_search.model_name());
     } else {
-        tracing::warn!("CLIP_API_ENDPOINT not set — image upload/search will fail until configured");
+        tracing::warn!(
+            "CLIP_API_ENDPOINT not set — image upload/search will fail until configured"
+        );
     }
     if let Err(e) = image_search.ensure_collection().await {
         tracing::warn!("Qdrant style_images collection init failed: {e}");

@@ -24,8 +24,8 @@ impl DocumentParser {
 
     /// Parse a PDF from raw bytes using lopdf.
     pub fn parse_pdf(bytes: &[u8]) -> Result<String> {
-        let doc = lopdf::Document::load_mem(bytes)
-            .context("Failed to load PDF — is it a valid PDF?")?;
+        let doc =
+            lopdf::Document::load_mem(bytes).context("Failed to load PDF — is it a valid PDF?")?;
 
         let page_numbers: Vec<u32> = doc.get_pages().keys().copied().collect();
         let mut pages: Vec<String> = Vec::new();

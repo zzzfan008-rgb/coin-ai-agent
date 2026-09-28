@@ -2,9 +2,8 @@
 
 use std::sync::Arc;
 
-use sqlx::Row;
 use axum::{
-    extract::{Multipart, Path, Query, State, Request},
+    extract::{Multipart, Path, Query, Request, State},
     response::{IntoResponse, Response},
     Json,
 };
@@ -12,6 +11,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sqlx::Row;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
@@ -183,9 +183,7 @@ pub async fn chat_completions(
         .and_then(|b| b.knowledge_collections.clone());
 
     // Optional session for persisting the assistant reply + token usage.
-    let session_id = extra_body
-        .as_ref()
-        .and_then(|b| b.session_id.clone());
+    let session_id = extra_body.as_ref().and_then(|b| b.session_id.clone());
 
     // ── Intent routing (T-014) ─────────────────────────────────────────────
     // 用户未手动指定 skill_ids 时，对最后一条 user 消息做规则分类，
@@ -446,17 +444,19 @@ async fn stream_chat(state: Arc<AppServices>, req: CoreChatRequest) -> Response 
         if let Some(ref sid) = session_id {
             if let Ok(session_uuid) = Uuid::parse_str(sid) {
                 let resolved = model.clone().unwrap_or_else(|| "unknown".into());
-                let _ = session_store.save_message(
-                    session_uuid,
-                    "assistant",
-                    &reply,
-                    Some(&resolved),
-                    Some("stop"),
-                    Some(usage.total_tokens as i32),
-                    Some(usage.prompt_tokens as i32),
-                    Some(usage.completion_tokens as i32),
-                    None,
-                ).await;
+                let _ = session_store
+                    .save_message(
+                        session_uuid,
+                        "assistant",
+                        &reply,
+                        Some(&resolved),
+                        Some("stop"),
+                        Some(usage.total_tokens as i32),
+                        Some(usage.prompt_tokens as i32),
+                        Some(usage.completion_tokens as i32),
+                        None,
+                    )
+                    .await;
             }
         }
 
@@ -474,10 +474,10 @@ async fn stream_chat(state: Arc<AppServices>, req: CoreChatRequest) -> Response 
         let _ = tx.send(Bytes::from_static(b"data: [DONE]\n\n"));
     });
 
+    use futures::StreamExt as Fs;
     use std::pin::pin;
     use std::time::Duration;
-    use tokio::time::interval;
-    use futures::StreamExt as Fs; // T-022: for filter_map
+    use tokio::time::interval; // T-022: for filter_map
 
     let idle_secs = state.config.sse_idle_timeout_secs;
     // T-022: keepalive interval = min(45s, idle/2) so at least one ping
@@ -519,13 +519,20 @@ async fn stream_chat(state: Arc<AppServices>, req: CoreChatRequest) -> Response 
     // Merge both streams. Both emit Bytes so merged is TryStream<Ok = Bytes>.
     let merged = tokio_stream::StreamExt::merge(data_stream, ka_stream);
 
-    let mut response = axum::response::Response::new(
-        axum::body::Body::from_stream(merged),
-    );
+    let mut response = axum::response::Response::new(axum::body::Body::from_stream(merged));
     let headers = response.headers_mut();
-    headers.insert(axum::http::header::CONTENT_TYPE, "text/event-stream".parse().unwrap());
-    headers.insert(axum::http::header::CACHE_CONTROL, "no-cache".parse().unwrap());
-    headers.insert(axum::http::header::CONNECTION, "keep-alive".parse().unwrap());
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        "text/event-stream".parse().unwrap(),
+    );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        "no-cache".parse().unwrap(),
+    );
+    headers.insert(
+        axum::http::header::CONNECTION,
+        "keep-alive".parse().unwrap(),
+    );
     // T-022: disable proxy/nginx buffering for SSE
     headers.insert(
         axum::http::header::HeaderName::from_static("x-accel-buffering"),
@@ -538,7 +545,12 @@ async fn stream_chat(state: Arc<AppServices>, req: CoreChatRequest) -> Response 
     );
     headers.insert(
         axum::http::header::HeaderName::from_static("x-sse-write-timeout"),
-        state.config.sse_write_timeout_secs.to_string().parse().unwrap(),
+        state
+            .config
+            .sse_write_timeout_secs
+            .to_string()
+            .parse()
+            .unwrap(),
     );
     response
 }
@@ -561,7 +573,13 @@ pub async fn create_session(
     let user_id = parse_uuid("user_id", &req.user_id)?;
     let session = state
         .session_store
-        .create_session(org_id, dept_id, user_id, req.title.as_deref(), req.model.as_deref())
+        .create_session(
+            org_id,
+            dept_id,
+            user_id,
+            req.title.as_deref(),
+            req.model.as_deref(),
+        )
         .await?;
     Ok(Json(session))
 }
@@ -622,13 +640,15 @@ pub async fn list_skills() -> Json<serde_json::Value> {
             let skills: Vec<_> = engine
                 .list_skills()
                 .into_iter()
-                .map(|s| serde_json::json!({
-                    "id": s.id,
-                    "name": s.name,
-                    "version": s.version,
-                    "description": s.description,
-                    "tools": s.tools
-                }))
+                .map(|s| {
+                    serde_json::json!({
+                        "id": s.id,
+                        "name": s.name,
+                        "version": s.version,
+                        "description": s.description,
+                        "tools": s.tools
+                    })
+                })
                 .collect();
             Json(serde_json::json!({ "skills": skills }))
         }
@@ -753,8 +773,7 @@ fn skill_system_prompt(skill_ids: &[String]) -> Option<String> {
 }
 
 fn parse_uuid(field: &str, raw: &str) -> Result<Uuid, crate::error::AppError> {
-    Uuid::parse_str(raw)
-        .map_err(|_| crate::error::AppError::BadRequest(format!("Invalid {field}")))
+    Uuid::parse_str(raw).map_err(|_| crate::error::AppError::BadRequest(format!("Invalid {field}")))
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -820,12 +839,12 @@ pub async fn knowledge_search(
 
     // Identity: gateway headers first, request fields for internal calls.
     let (h_org, h_dept, _) = header_identity(&headers);
-    let org_id = h_org.or(req.org_id).ok_or_else(|| {
-        crate::error::AppError::BadRequest("org_id required".into())
-    })?;
-    let dept_id = h_dept.or(req.dept_id).ok_or_else(|| {
-        crate::error::AppError::BadRequest("dept_id required".into())
-    })?;
+    let org_id = h_org
+        .or(req.org_id)
+        .ok_or_else(|| crate::error::AppError::BadRequest("org_id required".into()))?;
+    let dept_id = h_dept
+        .or(req.dept_id)
+        .ok_or_else(|| crate::error::AppError::BadRequest("dept_id required".into()))?;
 
     // Validate UUIDs up front for clearer error messages.
     parse_uuid("org_id", &org_id)?;
@@ -850,10 +869,22 @@ pub async fn knowledge_search(
         .map(|h| {
             let p = &h.payload;
             KnowledgeHit {
-                text: p.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                text: p
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 score: h.score,
-                doc_id: p.get("doc_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                title: p.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                doc_id: p
+                    .get("doc_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                title: p
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 chunk_index: p.get("chunk_index").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
             }
         })
@@ -879,7 +910,11 @@ pub fn header_identity(
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
     };
-    (get("x-auth-org-id"), get("x-auth-dept-id"), get("x-auth-user-id"))
+    (
+        get("x-auth-org-id"),
+        get("x-auth-dept-id"),
+        get("x-auth-user-id"),
+    )
 }
 
 /// Accept a multipart file upload, persist a DB record, and kick off
@@ -904,10 +939,7 @@ pub async fn upload_knowledge_document(
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
             "file" => {
-                original_filename = field
-                    .file_name()
-                    .unwrap_or("uploaded")
-                    .to_string();
+                original_filename = field.file_name().unwrap_or("uploaded").to_string();
                 let data = field
                     .bytes()
                     .await
@@ -1308,9 +1340,7 @@ pub async fn mcp_server_tools(
 // ── GET /api/mcp/servers ─────────────────────────────────────────────────────
 
 /// List all registered MCP server IDs plus their health status.
-pub async fn mcp_servers(
-    State(_state): State<AppState>,
-) -> Json<serde_json::Value> {
+pub async fn mcp_servers(State(_state): State<AppState>) -> Json<serde_json::Value> {
     let health = crate::mcp::MCP_MANAGER.health_check().await;
     let servers: Vec<serde_json::Value> = health
         .into_iter()
@@ -1375,62 +1405,63 @@ pub async fn find_similar_images(
     // Gateway-injected identity (preferred over multipart/JSON fields).
     let (h_org, h_dept, _h_user) = header_identity(request.headers());
 
-    let (image_bytes, org_id_raw, dept_id_raw, top_k) =
-        if content_type.starts_with("multipart/form-data") {
-            let mut multipart = Multipart::from_request(request, &state)
-                .await
-                .map_err(|e| crate::error::AppError::BadRequest(format!("Invalid multipart: {e}")))?;
+    let (image_bytes, org_id_raw, dept_id_raw, top_k) = if content_type
+        .starts_with("multipart/form-data")
+    {
+        let mut multipart = Multipart::from_request(request, &state)
+            .await
+            .map_err(|e| crate::error::AppError::BadRequest(format!("Invalid multipart: {e}")))?;
 
-            let mut file_bytes: Vec<u8> = Vec::new();
-            let mut org = String::new();
-            let mut dept = String::new();
-            let mut k = 5usize;
+        let mut file_bytes: Vec<u8> = Vec::new();
+        let mut org = String::new();
+        let mut dept = String::new();
+        let mut k = 5usize;
 
-            while let Some(field) = multipart.next_field().await.map_err(|e| {
-                crate::error::AppError::BadRequest(format!("Multipart field: {e}"))
-            })? {
-                match field.name().unwrap_or("") {
-                    "file" => {
-                        file_bytes = field
-                            .bytes()
-                            .await
-                            .map_err(|e| {
-                                crate::error::AppError::BadRequest(format!("Read file: {e}"))
-                            })?
-                            .to_vec();
-                        if file_bytes.len() > 10 * 1024 * 1024 {
-                            return Err(crate::error::AppError::BadRequest(
-                                "Image exceeds 10MB limit".into(),
-                            ));
-                        }
+        while let Some(field) = multipart
+            .next_field()
+            .await
+            .map_err(|e| crate::error::AppError::BadRequest(format!("Multipart field: {e}")))?
+        {
+            match field.name().unwrap_or("") {
+                "file" => {
+                    file_bytes = field
+                        .bytes()
+                        .await
+                        .map_err(|e| crate::error::AppError::BadRequest(format!("Read file: {e}")))?
+                        .to_vec();
+                    if file_bytes.len() > 10 * 1024 * 1024 {
+                        return Err(crate::error::AppError::BadRequest(
+                            "Image exceeds 10MB limit".into(),
+                        ));
                     }
-                    "org_id" => org = field.text().await.unwrap_or_default(),
-                    "dept_id" => dept = field.text().await.unwrap_or_default(),
-                    "top_k" => {
-                        k = field
-                            .text()
-                            .await
-                            .ok()
-                            .and_then(|v| v.parse().ok())
-                            .unwrap_or(5);
-                    }
-                    _ => {}
                 }
+                "org_id" => org = field.text().await.unwrap_or_default(),
+                "dept_id" => dept = field.text().await.unwrap_or_default(),
+                "top_k" => {
+                    k = field
+                        .text()
+                        .await
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(5);
+                }
+                _ => {}
             }
-            (file_bytes, org, dept, k)
-        } else {
-            // JSON body — buffer then parse.
-            let (parts, body) = request.into_parts();
-            let bytes = axum::body::to_bytes(body, 10 * 1024 * 1024)
-                .await
-                .map_err(|e| crate::error::AppError::BadRequest(format!("Read body: {e}")))?;
-            let _ = parts;
-            let req: SimilarImagesJsonRequest = serde_json::from_slice(&bytes)?;
-            let decoded = crate::images::clip::base64_decode(&req.image_base64).map_err(|e| {
-                crate::error::AppError::BadRequest(format!("Invalid image_base64: {e}"))
-            })?;
-            (decoded, req.org_id, req.dept_id, req.top_k)
-        };
+        }
+        (file_bytes, org, dept, k)
+    } else {
+        // JSON body — buffer then parse.
+        let (parts, body) = request.into_parts();
+        let bytes = axum::body::to_bytes(body, 10 * 1024 * 1024)
+            .await
+            .map_err(|e| crate::error::AppError::BadRequest(format!("Read body: {e}")))?;
+        let _ = parts;
+        let req: SimilarImagesJsonRequest = serde_json::from_slice(&bytes)?;
+        let decoded = crate::images::clip::base64_decode(&req.image_base64).map_err(|e| {
+            crate::error::AppError::BadRequest(format!("Invalid image_base64: {e}"))
+        })?;
+        (decoded, req.org_id, req.dept_id, req.top_k)
+    };
 
     if image_bytes.is_empty() {
         return Err(crate::error::AppError::BadRequest("Image is empty".into()));
@@ -1454,12 +1485,11 @@ pub async fn find_similar_images(
         .collect();
     let mut name_map = std::collections::HashMap::new();
     if !style_ids.is_empty() {
-        let rows: Vec<(Uuid, String)> = sqlx::query_as(
-            "SELECT id, name FROM styles WHERE id = ANY($1)",
-        )
-        .bind(&style_ids)
-        .fetch_all(state.session_store.pool())
-        .await?;
+        let rows: Vec<(Uuid, String)> =
+            sqlx::query_as("SELECT id, name FROM styles WHERE id = ANY($1)")
+                .bind(&style_ids)
+                .fetch_all(state.session_store.pool())
+                .await?;
         name_map.extend(rows);
     }
 
@@ -1519,8 +1549,7 @@ pub async fn upload_style_image(
 
     let mut file_bytes: Vec<u8> = Vec::new();
     let mut original_filename = String::new();
-    let mut uploaded_by: Option<Uuid> =
-        h_user.as_deref().map(Uuid::parse_str).and_then(Result::ok);
+    let mut uploaded_by: Option<Uuid> = h_user.as_deref().map(Uuid::parse_str).and_then(Result::ok);
 
     while let Some(field) = multipart
         .next_field()
@@ -1661,7 +1690,9 @@ pub async fn list_style_images(
     .fetch_all(state.session_store.pool())
     .await?;
 
-    Ok(Json(serde_json::json!({ "images": images, "total": images.len() })))
+    Ok(Json(
+        serde_json::json!({ "images": images, "total": images.len() }),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1700,9 +1731,7 @@ pub async fn upload_chat_image(
     {
         match field.name().unwrap_or("") {
             "file" => {
-                let name = field
-                    .file_name()
-                    .map(|n| n.to_string());
+                let name = field.file_name().map(|n| n.to_string());
                 file_ext = name
                     .as_ref()
                     .and_then(|f| f.rsplit('.').next())
@@ -1741,7 +1770,11 @@ pub async fn upload_chat_image(
     //   - $CARGO_MANIFEST_DIR/../  (set when running via cargo run/build)
     //   - else fall back to cwd and detect whether we are inside api-core/ subdir
     let base = std::env::var("CARGO_MANIFEST_DIR")
-        .map(|p| std::path::PathBuf::from(&p).join("..").join("uploads/chat-images"))
+        .map(|p| {
+            std::path::PathBuf::from(&p)
+                .join("..")
+                .join("uploads/chat-images")
+        })
         .or_else(|_| std::env::current_dir().map(|p| p.join("uploads/chat-images")))
         .unwrap_or_else(|_| std::path::PathBuf::from("uploads/chat-images"));
     let dir = base.join(org_id.to_string());
@@ -1753,6 +1786,10 @@ pub async fn upload_chat_image(
         .await
         .map_err(|e| crate::error::AppError::Internal(format!("Write file: {e}")))?;
 
-    let url = format!("/uploads/chat-images/{}/{}", org_id, format!("{image_id}.{file_ext}"));
+    let url = format!(
+        "/uploads/chat-images/{}/{}",
+        org_id,
+        format!("{image_id}.{file_ext}")
+    );
     Ok(Json(serde_json::json!({ "url": url })))
 }

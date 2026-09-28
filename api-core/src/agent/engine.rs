@@ -61,7 +61,12 @@ impl AgentEngine {
         session_store: Arc<SessionStore>,
         rag: Option<Arc<rag::RagRetriever>>,
     ) -> Self {
-        Self { config, llm, session_store, rag }
+        Self {
+            config,
+            llm,
+            session_store,
+            rag,
+        }
     }
 
     /// Run one full turn until the LLM produces a message with no tool calls.
@@ -78,11 +83,7 @@ impl AgentEngine {
         let mut total_usage = TurnUsage::default();
 
         for turn in 1..=self.config.max_turns {
-            self.maybe_inject_rag_context(
-                &mut conversation,
-                knowledge_collections,
-                user_ctx,
-            )
+            self.maybe_inject_rag_context(&mut conversation, knowledge_collections, user_ctx)
                 .await;
 
             let response = self

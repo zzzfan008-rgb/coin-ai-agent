@@ -108,11 +108,9 @@ mod tests {
     #[test]
     fn test_parse_fabric_query() {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let content = std::fs::read_to_string(format!(
-            "{}/../skills/fabric-query/SKILL.md",
-            manifest_dir
-        ))
-        .unwrap();
+        let content =
+            std::fs::read_to_string(format!("{}/../skills/fabric-query/SKILL.md", manifest_dir))
+                .unwrap();
         let meta = SkillLoader::parse(&content).unwrap();
         assert_eq!(meta.id, "fabric-query");
         assert_eq!(meta.tools.len(), 3);
