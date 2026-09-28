@@ -5,9 +5,6 @@
  * 对接真实网关时，本文件无需修改（Vite proxy 转发到 :8080）。
  */
 
-const TOKEN_KEY = 'fai_token'
-const USER_KEY = 'fai_user'
-
 // ── 类型定义（与 gateway.yml schemas 对齐） ────────────────────────────────
 
 export interface LoginRequest {
@@ -114,13 +111,14 @@ export const SKILL_CATALOG: SkillInfo[] = [
 ]
 
 // ── Token 管理 ──────────────────────────────────────────────────────────────
+// JWT lives in an httpOnly cookie set by the gateway. The browser sends it
+// automatically with every request (credentials: 'include'). localStorage only
+// stores user profile data (non-sensitive).
 
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
-}
+const USER_KEY = 'fai_user'
 
 export function saveAuth(_token: string, user: AuthUser): void {
-  // Token stored in httpOnly cookie by the gateway — never touch localStorage for auth.
+  // Token stored in httpOnly cookie — never touch localStorage for auth.
   localStorage.setItem(USER_KEY, JSON.stringify(user))
 }
 
@@ -135,8 +133,7 @@ export function getStoredUser(): AuthUser | null {
 }
 
 export function clearAuth(): void {
-  // Remove localStorage state; the httpOnly cookie is cleared by POST /api/auth/logout.
-  localStorage.removeItem(TOKEN_KEY)
+  // Remove localStorage state only; the httpOnly cookie is cleared by POST /api/auth/logout.
   localStorage.removeItem(USER_KEY)
 }
 

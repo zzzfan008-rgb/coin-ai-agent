@@ -44,7 +44,7 @@ func Load() *Config {
 		RustCoreURL:   env("RUST_CORE_URL", "http://localhost:8081"),
 		MinimaxKey:    env("MINIMAX_API_KEY", ""),
 		DeepSeekKey:   env("DEEPSEEK_API_KEY", ""),
-		CookieSecure:  env("COOKIE_SECURE", "false") == "true",
+		CookieSecure:  env("JWT_COOKIE_SECURE", "false") == "true",
 		// T-022: SSE timeouts (seconds); passed as env to core via upstream headers
 		SSEIdleTimeoutSecs:  sseIdle,
 		SSEWriteTimeoutSecs: sseWrite,

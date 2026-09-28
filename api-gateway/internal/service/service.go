@@ -40,14 +40,16 @@ func NewAuthService(db *sqlx.DB, jwtSvc *auth.JWTService, cookieSecure bool) *Au
 
 // SetAuthCookie writes the JWT as an httpOnly SameSite=Lax cookie on the response.
 // The Secure attribute is set based on the CookieSecure config flag.
+// Cookie name is "jwt" to match the dual-track auth spec.
 func (s *AuthService) SetAuthCookie(w http.ResponseWriter, token string) {
 	cookie := &http.Cookie{
-		Name:     "token",
+		Name:     "jwt",
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   s.CookieSecure,
+		MaxAge:   86400, // 24 hours, mirrors JWT expiry
 	}
 	http.SetCookie(w, cookie)
 }
@@ -55,7 +57,7 @@ func (s *AuthService) SetAuthCookie(w http.ResponseWriter, token string) {
 // ClearAuthCookie instructs the browser to delete the auth cookie.
 func (s *AuthService) ClearAuthCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     "token",
+		Name:     "jwt",
 		Value:    "",
 		Path:     "/",
 		MaxAge:   0,

@@ -106,8 +106,8 @@ func JWTMiddleware(jwtSvc *auth.JWTService) mux.MiddlewareFunc {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var tokenString string
 
-			// Track 1: read from httpOnly cookie (browser sessions)
-			if cookie, err := r.Cookie("token"); err == nil && cookie.Value != "" {
+			// Track 1: read from httpOnly cookie "jwt" (browser sessions — XSS safe)
+			if cookie, err := r.Cookie("jwt"); err == nil && cookie.Value != "" {
 				tokenString = cookie.Value
 			}
 
