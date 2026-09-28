@@ -47,7 +47,7 @@ pub struct AppConfig {
 
     // SSE timeouts (T-022)
     /// Max seconds without data before sending a keepalive comment.
-    /// Keepalive interval = min(45s, SSE_IDLE_TIMEOUT / 2).
+    /// Keepalive interval = min(45s, SSE_IDLE_TIMEOUT_SECS / 2).
     pub sse_idle_timeout_secs: u64,
     /// Max seconds for a complete streaming turn.
     pub sse_write_timeout_secs: u64,
@@ -98,8 +98,8 @@ impl AppConfig {
             minio_access_key: env_var("MINIO_ROOT_USER", "minioadmin"),
             minio_secret_key: env_var("MINIO_ROOT_PASSWORD", "minioadmin"),
 
-            sse_idle_timeout_secs: env_parse("SSE_IDLE_TIMEOUT", 120u64),
-            sse_write_timeout_secs: env_parse("SSE_WRITE_TIMEOUT", 300u64),
+            sse_idle_timeout_secs: env_parse("SSE_IDLE_TIMEOUT_SECS", 300u64),
+            sse_write_timeout_secs: env_parse("SSE_WRITE_TIMEOUT_SECS", 600u64),
         })
     }
 }

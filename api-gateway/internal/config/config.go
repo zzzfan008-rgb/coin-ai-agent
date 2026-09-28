@@ -24,8 +24,9 @@ type Config struct {
 
 func Load() *Config {
 	expHours, _ := strconv.Atoi(env("JWT_EXP_HOURS", "72"))
-	sseIdle, _ := strconv.Atoi(env("SSE_IDLE_TIMEOUT", "120"))
-	sseWrite, _ := strconv.Atoi(env("SSE_WRITE_TIMEOUT", "300"))
+	// T-022: SSE timeout config (seconds); match spec defaults
+	sseIdle, _ := strconv.Atoi(env("SSE_IDLE_TIMEOUT_SECS", "300"))
+	sseWrite, _ := strconv.Atoi(env("SSE_WRITE_TIMEOUT_SECS", "600"))
 
 	secret := env("JWT_SECRET", "dev-only-insecure-fallback-32chars!!")
 	// Warn on insecure default in production.

@@ -81,10 +81,10 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 		userID, orgID, deptID, role = claims.Subject, claims.OrgID, claims.DeptID, claims.Role
 	}
 
-	// Use SSE_WRITE_TIMEOUT from env (default 300s) so long streams are not cut by the server.
-	// WriteTimeout on the http.Server is 0 so long streams are not cut by the server.
-	sseWriteSecs := 300
-	if v, err := strconv.Atoi(os.Getenv("SSE_WRITE_TIMEOUT")); err == nil && v > 0 {
+	// T-022: SSE timeout. Read SSE_WRITE_TIMEOUT_SECS from env (default 600s) so long
+	// streams are not cut by the server. WriteTimeout on the http.Server stays 0.
+	sseWriteSecs := 600
+	if v, err := strconv.Atoi(os.Getenv("SSE_WRITE_TIMEOUT_SECS")); err == nil && v > 0 {
 		sseWriteSecs = v
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(sseWriteSecs)*time.Second)
