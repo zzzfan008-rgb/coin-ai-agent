@@ -9,7 +9,10 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts,.tsx",
-    "test": "vitest run"
+    "lint:fix": "eslint src --ext .ts,.tsx --fix",
+    "test": "NODE_OPTIONS=--localstorage-file=/tmp/vitest-localstorage vitest run",
+    "test:watch": "NODE_OPTIONS=--localstorage-file=/tmp/vitest-localstorage vitest",
+    "gate": "npm run typecheck && npm run lint && npm run test"
   },
   "dependencies": {
     "lucide-react": "^0.446.0",
