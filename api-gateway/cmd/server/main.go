@@ -175,6 +175,8 @@ if strings.Contains(rawPath, "..") {
 				reqID = fmt.Sprintf("%d", time.Now().UnixNano())
 			}
 			w.Header().Set("X-Request-ID", reqID)
+			w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+			w.Header().Set("Pragma", "no-cache")
 			next.ServeHTTP(w, req)
 		})
 	})
