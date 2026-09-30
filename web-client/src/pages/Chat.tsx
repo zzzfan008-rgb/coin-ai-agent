@@ -136,47 +136,56 @@ export default function Chat() {
   return (
     <>
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* 顶栏 */}
-        <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
-        <button
-          type="button"
-          onClick={openSidebar}
-          className="rounded-md p-1.5 text-muted hover:bg-surface hover:text-content lg:hidden"
-          title="侧边栏"
-        >
-          <Menu size={18} />
-        </button>
-        <h1 className="min-w-0 flex-1 truncate text-sm font-medium text-content">
-          {chat.currentSession?.title || '加载中…'}
-        </h1>
+        {/* 顶栏：改进设计 */}
+        <header className="relative flex h-13 shrink-0 items-center gap-3 border-b border-border/50 bg-bg/80 px-4 backdrop-blur-sm">
+          {/* 顶部渐变光效 */}
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
+
+          <button
+            type="button"
+            onClick={openSidebar}
+            className="rounded-xl p-1.5 text-muted transition-all hover:bg-surface hover:text-content lg:hidden"
+            title="侧边栏"
+          >
+            <Menu size={18} />
+          </button>
+
+          {/* 标题区 */}
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <div className="h-4 w-px bg-border/50" />
+            <h1 className="min-w-0 flex-1 truncate text-sm font-semibold text-content">
+              {chat.currentSession?.title || '加载中…'}
+            </h1>
+          </div>
         {/* T-022: SSE connection status indicator */}
         {chat.isStreaming && (
-          <span className="flex items-center gap-1.5 text-xs text-primary">
+          <span className="flex items-center gap-1.5 rounded-full bg-primary/15 px-2.5 py-1 text-xs font-medium text-primary-light">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
             生成中
           </span>
         )}
         {chat.selectedSkillIds.length > 0 && (
-          <span className="hidden rounded-md bg-primary/15 px-2 py-0.5 text-[11px] text-primary-light sm:block">
-            {chat.selectedSkillIds.length} 个 Skill 已启用
+          <span className="hidden rounded-full bg-fabric-purple/15 px-2.5 py-1 text-[11px] font-medium text-fabric-purple sm:block">
+            {chat.selectedSkillIds.length} 个 Skill
           </span>
         )}
+        <div className="h-4 w-px bg-border/30" />
         <button
           type="button"
           onClick={() => setAddToProjectOpen(true)}
           disabled={!chat.currentSession}
           title="添加到项目"
-          className="rounded-md p-1.5 text-muted hover:bg-surface hover:text-content disabled:opacity-40"
+          className="rounded-xl p-1.5 text-muted transition-all hover:bg-surface hover:text-primary disabled:opacity-40"
         >
           <FolderPlus size={18} />
         </button>
         <button
           type="button"
           onClick={() => setSkillPanelOpen((v) => !v)}
-          className={`rounded-md p-1.5 transition-colors xl:hidden ${
+          className={`rounded-xl p-1.5 transition-all xl:hidden ${
             skillPanelOpen
               ? 'bg-primary/20 text-primary-light'
-              : 'text-muted hover:bg-surface hover:text-content'
+              : 'text-muted hover:bg-surface hover:text-primary'
           }`}
           title="Skills"
         >
@@ -224,11 +233,45 @@ export default function Chat() {
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-5">
         <div className="mx-auto max-w-3xl space-y-5">
           {chat.messages.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center pt-24 text-center">
-              <p className="text-base font-medium text-content">开始一个新会话</p>
+            <div className="flex h-full flex-col items-center justify-center pt-16 text-center">
+              {/* 空状态图标 */}
+              <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-primary/20 to-fabric-purple/20 shadow-glow">
+                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary to-fabric-purple shadow-glow">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                  </svg>
+                </div>
+              </div>
+              <p className="text-lg font-semibold text-content">开始一个新会话</p>
               <p className="mt-2 max-w-xs text-sm text-muted">
-                在下方输入框描述你的设计问题，或先在右侧 Skill 面板选择专业技能。
+                在下方输入框描述你的设计问题，或先在右侧选择专业技能。
               </p>
+              {/* 快捷提示卡片 */}
+              <div className="mt-6 grid grid-cols-2 gap-2 max-w-sm">
+                {[
+                  '帮我设计一款春夏连衣裙',
+                  '查找纯棉面料的替代品',
+                  '分析最新流行趋势',
+                  '生成技术规格文档',
+                ].map((hint) => (
+                  <button
+                    key={hint}
+                    type="button"
+                    onClick={() => {
+                      const input = document.querySelector('textarea') as HTMLTextAreaElement
+                      if (input) {
+                        input.value = hint
+                        // eslint-disable-next-line no-undef
+                        input.dispatchEvent(new Event('input', { bubbles: true }))
+                        input.focus()
+                      }
+                    }}
+                    className="rounded-xl border border-border/50 bg-surface-elevated/40 px-3 py-2 text-left text-xs text-muted transition-all hover:border-primary/40 hover:text-primary-light hover:bg-surface"
+                  >
+                    {hint}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
             chat.messages.map((m) => (

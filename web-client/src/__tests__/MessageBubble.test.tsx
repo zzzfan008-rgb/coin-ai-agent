@@ -56,12 +56,14 @@ describe('MessageBubble', () => {
   })
 
   describe('streaming state', () => {
-    it('shows streaming hint when content is empty and streaming', async () => {
+    it('shows streaming skeleton when content is empty and streaming', () => {
       renderBubble({ role: 'assistant', content: '' }, true)
 
-      // WAIT_HINTS[0] should be visible
-      await screen.findByText(/Coin-AI 正在为您提供专业的服务/)
-      expect(screen.getByText(/Coin-AI 正在为您提供专业的服务/)).toBeInTheDocument()
+      // StreamingSkeleton: 3 typing dots + 3 skeleton lines
+      const dots = document.querySelectorAll('.typing-dot')
+      expect(dots.length).toBe(3)
+      const skeletons = document.querySelectorAll('.skeleton-shimmer')
+      expect(skeletons.length).toBe(3)
     })
 
     it('shows typing dots when streaming', () => {

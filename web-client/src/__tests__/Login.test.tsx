@@ -40,8 +40,8 @@ describe('Login', () => {
 
   it('renders username and password inputs', () => {
     renderLogin()
-    expect(screen.getByPlaceholderText('请输入用户名')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('请输入密码')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('输入用户名')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('输入密码')).toBeInTheDocument()
   })
 
   it('renders submit button', () => {
@@ -55,8 +55,8 @@ describe('Login', () => {
 
     renderLogin()
 
-    await user.type(screen.getByPlaceholderText('请输入用户名'), 'baduser')
-    await user.type(screen.getByPlaceholderText('请输入密码'), 'wrongpass')
+    await user.type(screen.getByPlaceholderText('输入用户名'), 'baduser')
+    await user.type(screen.getByPlaceholderText('输入密码'), 'wrongpass')
     await user.click(screen.getByRole('button', { name: '登 录' }))
 
     // Wait for error to appear
@@ -71,8 +71,8 @@ describe('Login', () => {
 
     renderLogin()
 
-    await user.type(screen.getByPlaceholderText('请输入用户名'), 'designer')
-    await user.type(screen.getByPlaceholderText('请输入密码'), 'designer123')
+    await user.type(screen.getByPlaceholderText('输入用户名'), 'designer')
+    await user.type(screen.getByPlaceholderText('输入密码'), 'designer123')
     await user.click(screen.getByRole('button', { name: '登 录' }))
 
     expect(mockLogin).toHaveBeenCalledWith({
@@ -89,10 +89,10 @@ describe('Login', () => {
     await user.click(screen.getByRole('button', { name: /填充演示账号/ }))
 
     expect(
-      (screen.getByPlaceholderText('请输入用户名') as HTMLInputElement).value,
+      (screen.getByPlaceholderText('输入用户名') as HTMLInputElement).value,
     ).toBe('designer')
     expect(
-      (screen.getByPlaceholderText('请输入密码') as HTMLInputElement).value,
+      (screen.getByPlaceholderText('输入密码') as HTMLInputElement).value,
     ).toBe('designer123')
   })
 
@@ -101,7 +101,7 @@ describe('Login', () => {
     renderLogin()
 
     const passwordInput = screen.getByPlaceholderText(
-      '请输入密码',
+      '输入密码',
     ) as HTMLInputElement
 
     // Initially hidden (password type)

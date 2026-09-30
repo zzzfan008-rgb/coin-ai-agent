@@ -51,8 +51,8 @@ describe('LoginForm 渲染', () => {
 
   it('渲染用户名和密码输入框', () => {
     renderLogin()
-    expect(screen.getByPlaceholderText('请输入用户名')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('请输入密码')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('输入用户名')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('输入密码')).toBeInTheDocument()
   })
 
   it('渲染登录按钮', () => {
@@ -76,8 +76,8 @@ describe('LoginForm 提交逻辑', () => {
     const user = userEvent.setup()
     renderLogin()
 
-    await user.type(screen.getByPlaceholderText('请输入用户名'), 'alice')
-    await user.type(screen.getByPlaceholderText('请输入密码'), 'secret123')
+    await user.type(screen.getByPlaceholderText('输入用户名'), 'alice')
+    await user.type(screen.getByPlaceholderText('输入密码'), 'secret123')
     await user.click(screen.getByRole('button', { name: '登 录' }))
 
     expect(mockLogin).toHaveBeenCalledWith({
@@ -102,8 +102,8 @@ describe('LoginForm 提交逻辑', () => {
 
     renderLogin()
 
-    await user.type(screen.getByPlaceholderText('请输入用户名'), 'baduser')
-    await user.type(screen.getByPlaceholderText('请输入密码'), 'badpass')
+    await user.type(screen.getByPlaceholderText('输入用户名'), 'baduser')
+    await user.type(screen.getByPlaceholderText('输入密码'), 'badpass')
     await user.click(screen.getByRole('button', { name: '登 录' }))
 
     await screen.findByText((_, el) => el?.textContent === '用户名或密码错误')
@@ -123,10 +123,10 @@ describe('LoginForm 演示账号填充', () => {
     await user.click(screen.getByRole('button', { name: /填充演示账号/ }))
 
     const usernameInput = screen.getByPlaceholderText(
-      '请输入用户名',
+      '输入用户名',
     ) as HTMLInputElement
     const passwordInput = screen.getByPlaceholderText(
-      '请输入密码',
+      '输入密码',
     ) as HTMLInputElement
 
     expect(usernameInput.value).toBe('designer')
@@ -142,7 +142,7 @@ describe('LoginForm 密码可见性切换', () => {
 
   it('默认密码字段类型为 password', () => {
     renderLogin()
-    const pw = screen.getByPlaceholderText('请输入密码') as HTMLInputElement
+    const pw = screen.getByPlaceholderText('输入密码') as HTMLInputElement
     expect(pw.type).toBe('password')
   })
 
@@ -152,7 +152,7 @@ describe('LoginForm 密码可见性切换', () => {
 
     await user.click(screen.getByTitle('显示密码'))
 
-    const pw = screen.getByPlaceholderText('请输入密码') as HTMLInputElement
+    const pw = screen.getByPlaceholderText('输入密码') as HTMLInputElement
     expect(pw.type).toBe('text')
   })
 
@@ -163,7 +163,7 @@ describe('LoginForm 密码可见性切换', () => {
     await user.click(screen.getByTitle('显示密码'))
     await user.click(screen.getByTitle('隐藏密码'))
 
-    const pw = screen.getByPlaceholderText('请输入密码') as HTMLInputElement
+    const pw = screen.getByPlaceholderText('输入密码') as HTMLInputElement
     expect(pw.type).toBe('password')
   })
 })

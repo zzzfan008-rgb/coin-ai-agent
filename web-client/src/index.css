@@ -152,6 +152,7 @@ body {
   }
 }
 
+/* ── 打字指示器（3个点） ──────────────────────────────── */
 .typing-dot {
   animation: typing-pulse 1.2s ease-in-out infinite;
 }
@@ -172,6 +173,38 @@ body {
     opacity: 1;
     transform: translateY(-2px);
   }
+}
+
+/* ── AI 消息气泡发光效果 ──────────────────────────────── */
+@keyframes glow-pulse {
+  0%, 100% {
+    box-shadow: 0 0 12px rgba(99, 102, 241, 0.15), 0 0 24px rgba(99, 102, 241, 0.05);
+  }
+  50% {
+    box-shadow: 0 0 18px rgba(99, 102, 241, 0.25), 0 0 36px rgba(99, 102, 241, 0.1);
+  }
+}
+.ai-bubble-glow {
+  animation: glow-pulse 3s ease-in-out infinite;
+}
+
+/* ── 流式输出时的骨架 shimmer ─────────────────────────── */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer-line {
+  background: linear-gradient(90deg, #1e293b 25%, #273449 50%, #1e293b 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  border-radius: 4px;
+  height: 14px;
+  width: 60%;
+  margin-bottom: 8px;
+}
+.shimmer-line:last-child {
+  width: 40%;
+  margin-bottom: 0;
 }
 
 /* ── 颜色色块（HEX 色号旁的内联色块） ─────────────────────── */
@@ -205,4 +238,88 @@ body {
     opacity: 1;
     transform: none;
   }
+}
+
+/* ── 品牌渐变背景（auth 页面） ─────────────────────────── */
+.brand-gradient {
+  background: radial-gradient(ellipse at 50% 0%, rgba(99, 102, 241, 0.18) 0%, transparent 60%),
+              radial-gradient(ellipse at 80% 80%, rgba(168, 85, 247, 0.08) 0%, transparent 50%),
+              #0f172a;
+}
+
+/* ── 玻璃态效果 ─────────────────────────────────────────── */
+.glass {
+  background: rgba(30, 41, 59, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* ── 登录页卡片渐变边框 ─────────────────────────────────── */
+.auth-card {
+  position: relative;
+}
+.auth-card::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 13px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.4) 0%, rgba(168, 85, 247, 0.2) 50%, rgba(99, 102, 241, 0.1) 100%);
+  z-index: -1;
+  opacity: 0.6;
+}
+
+/* ── Logo 闪烁光效 ──────────────────────────────────────── */
+@keyframes logo-float {
+  0%, 100% { box-shadow: 0 0 12px rgba(99, 102, 241, 0.4), 0 4px 6px rgba(0,0,0,0.3); }
+  50% { box-shadow: 0 0 24px rgba(99, 102, 241, 0.6), 0 4px 6px rgba(0,0,0,0.3); }
+}
+.logo-glow {
+  animation: logo-float 3s ease-in-out infinite;
+}
+
+/* ── 按钮 hover 光效 ───────────────────────────────────── */
+.btn-glow {
+  transition: all 0.2s ease;
+}
+.btn-glow:hover {
+  box-shadow: 0 0 16px rgba(99, 102, 241, 0.35);
+  transform: translateY(-1px);
+}
+.btn-glow:active {
+  transform: translateY(0);
+}
+
+/* ── 侧边栏项 hover 光效 ──────────────────────────────── */
+.sidebar-item-hover {
+  transition: all 0.15s ease;
+}
+.sidebar-item-hover:hover {
+  background: rgba(99, 102, 241, 0.08);
+}
+
+/* ── 消息入场动画 ───────────────────────────────────────── */
+@keyframes msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.msg-enter {
+  animation: msg-in 0.25s ease-out forwards;
+}
+
+/* ── 骨架屏加载动画 ─────────────────────────────────────── */
+@keyframes skeleton-wave {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.skeleton-shimmer {
+  background: linear-gradient(90deg, #1e293b 25%, #273449 50%, #1e293b 75%);
+  background-size: 800px 100%;
+  animation: skeleton-wave 1.8s ease-in-out infinite;
+  border-radius: 8px;
 }
