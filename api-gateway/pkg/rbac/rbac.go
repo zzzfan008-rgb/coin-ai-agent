@@ -18,8 +18,8 @@ type RBAC struct {
 }
 
 type policy struct {
-	role  string
-	path  string
+	role   string
+	path   string
 	method string
 }
 
@@ -151,13 +151,15 @@ func (r *RBAC) Check(role, path, method string) error {
 		return err
 	}
 	if !allowed {
-		// Debug: log which patterns exist for this role
-		fmt.Printf("[RBAC DEBUG] role=%q path=%q method=%q → denied, policies:\n", role, path, method)
+		// Denied: log the first few patterns for this role to aid debugging.
+		shown := 0
 		for _, p := range r.policies {
-			if p.role == role {
+			if p.role == role && shown < 5 {
 				re := patternToRegex(p.path)
 				m, _ := regexp.MatchString(re, path)
-				fmt.Printf("  pattern=%q regex=%q match=%v\n", p.path, re, m)
+				fmt.Printf("[RBAC] deny role=%s path=%s method=%s → pattern=%s match=%v\n",
+					role, path, method, re, m)
+				shown++
 			}
 		}
 		return ErrForbidden

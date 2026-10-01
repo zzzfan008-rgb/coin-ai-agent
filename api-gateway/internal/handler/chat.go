@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
 	"fashionai/api-gateway/internal/middleware"
 	"fashionai/api-gateway/internal/model"
 	"fashionai/api-gateway/internal/service"
 	"fashionai/api-gateway/pkg/auth"
+	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 )
 
 // ChatHandler handles OpenAI-compatible chat endpoints and WebSocket.

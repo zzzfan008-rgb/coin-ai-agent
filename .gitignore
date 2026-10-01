@@ -134,3 +134,7 @@ uploads/
 api-gateway/server
 api-gateway/server_new
 bin/
+
+# local start helpers
+api-core/start-tokenplan.sh
+api-core/start-with-token-plan.sh

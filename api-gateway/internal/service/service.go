@@ -11,20 +11,20 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/jmoiron/sqlx"
 	"fashionai/api-gateway/internal/db"
 	"fashionai/api-gateway/internal/model"
 	"fashionai/api-gateway/pkg/auth"
+	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 )
 
 var (
 	ErrUserExists      = errors.New("username already exists")
 	ErrInvalidCreds    = errors.New("invalid credentials")
-	ErrUserNotFound     = errors.New("user not found")
-	ErrSessionNotFound  = errors.New("session not found")
-	ErrDeptNotFound     = errors.New("department not found")
-	ErrProjectNotFound  = errors.New("project not found")
+	ErrUserNotFound    = errors.New("user not found")
+	ErrSessionNotFound = errors.New("session not found")
+	ErrDeptNotFound    = errors.New("department not found")
+	ErrProjectNotFound = errors.New("project not found")
 )
 
 type AuthService struct {
@@ -146,12 +146,12 @@ func (s *AuthService) Register(ctx context.Context, req model.RegisterRequest) (
 // Login verifies credentials and returns a JWT.
 func (s *AuthService) Login(ctx context.Context, req model.LoginRequest) (*model.AuthResponse, error) {
 	var user struct {
-		ID          uuid.UUID `db:"id"`
-		OrgID       uuid.UUID `db:"org_id"`
-		DeptID      uuid.UUID `db:"dept_id"`
-		Password    string    `db:"password_hash"`
+		ID          uuid.UUID      `db:"id"`
+		OrgID       uuid.UUID      `db:"org_id"`
+		DeptID      uuid.UUID      `db:"dept_id"`
+		Password    string         `db:"password_hash"`
 		DisplayName sql.NullString `db:"display_name"`
-		Role        string `db:"role"`
+		Role        string         `db:"role"`
 	}
 	err := s.db.GetContext(ctx, &user,
 		`SELECT id, org_id, dept_id, password_hash, display_name, role
@@ -402,14 +402,14 @@ func (s *SessionService) Create(ctx context.Context, orgID, deptID, userID uuid.
 
 func (s *SessionService) Get(ctx context.Context, orgID, sessionID uuid.UUID) (*model.SessionWithCount, error) {
 	var row struct {
-		ID            uuid.UUID `db:"id"`
-		OrgID         uuid.UUID `db:"org_id"`
-		UserID        uuid.UUID `db:"user_id"`
-		Title         string    `db:"title"`
-		IsArchived    bool      `db:"is_archived"`
-		MessageCount  int       `db:"message_count"`
-		CreatedAt     time.Time `db:"created_at"`
-		UpdatedAt     time.Time `db:"updated_at"`
+		ID           uuid.UUID `db:"id"`
+		OrgID        uuid.UUID `db:"org_id"`
+		UserID       uuid.UUID `db:"user_id"`
+		Title        string    `db:"title"`
+		IsArchived   bool      `db:"is_archived"`
+		MessageCount int       `db:"message_count"`
+		CreatedAt    time.Time `db:"created_at"`
+		UpdatedAt    time.Time `db:"updated_at"`
 	}
 	err := s.db.GetContext(ctx, &row,
 		`SELECT s.id, s.org_id, s.user_id, s.title, s.is_archived,
@@ -424,27 +424,27 @@ func (s *SessionService) Get(ctx context.Context, orgID, sessionID uuid.UUID) (*
 		return nil, err
 	}
 	return &model.SessionWithCount{
-		ID:            row.ID.String(),
-		OrgID:         row.OrgID.String(),
-		UserID:        row.UserID.String(),
-		Title:         row.Title,
-		IsArchived:    row.IsArchived,
-		MessageCount:   row.MessageCount,
-		CreatedAt:     row.CreatedAt,
-		UpdatedAt:     row.UpdatedAt,
+		ID:           row.ID.String(),
+		OrgID:        row.OrgID.String(),
+		UserID:       row.UserID.String(),
+		Title:        row.Title,
+		IsArchived:   row.IsArchived,
+		MessageCount: row.MessageCount,
+		CreatedAt:    row.CreatedAt,
+		UpdatedAt:    row.UpdatedAt,
 	}, nil
 }
 
 func (s *SessionService) List(ctx context.Context, orgID, userID uuid.UUID, archived bool, limit, offset int) (*model.SessionList, error) {
 	type row struct {
-		ID            uuid.UUID `db:"id"`
-		OrgID         uuid.UUID `db:"org_id"`
-		UserID        uuid.UUID `db:"user_id"`
-		Title         string    `db:"title"`
-		IsArchived    bool      `db:"is_archived"`
-		MessageCount  int       `db:"message_count"`
-		CreatedAt     time.Time `db:"created_at"`
-		UpdatedAt     time.Time `db:"updated_at"`
+		ID           uuid.UUID `db:"id"`
+		OrgID        uuid.UUID `db:"org_id"`
+		UserID       uuid.UUID `db:"user_id"`
+		Title        string    `db:"title"`
+		IsArchived   bool      `db:"is_archived"`
+		MessageCount int       `db:"message_count"`
+		CreatedAt    time.Time `db:"created_at"`
+		UpdatedAt    time.Time `db:"updated_at"`
 	}
 	var rows []row
 	err := s.db.SelectContext(ctx, &rows,
