@@ -2,10 +2,10 @@ package rbac
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 
 	"github.com/casbin/casbin/v2"
 )
@@ -14,6 +14,13 @@ var ErrForbidden = errors.New("access denied: insufficient role")
 
 type RBAC struct {
 	enforcer *casbin.Enforcer
+	policies []policy
+}
+
+type policy struct {
+	role  string
+	path  string
+	method string
 }
 
 func New() (*RBAC, error) {
@@ -106,29 +113,34 @@ m = r.role == p.role && pathMatch(r.path, p.path) && (p.method == "*" || r.metho
 		e.AddPolicy(p[0], p[1], p[2])
 	}
 
-	return &RBAC{enforcer: e}, nil
+	// Save for debug printing
+	var saved []policy
+	for _, p := range policies {
+		saved = append(saved, policy{role: p[0], path: p[1], method: p[2]})
+	}
+	return &RBAC{enforcer: e, policies: saved}, nil
 }
 
 // patternToRegex converts a Casbin-style path pattern to a regex.
 // "*" becomes ".*" and "{id}" becomes "[^/]+".
 func patternToRegex(pattern string) string {
-	// Escape special regex chars except our wildcards
 	re := "^"
+	inBrace := false
 	for _, ch := range pattern {
-		switch ch {
-		case '*':
+		if ch == '}' && inBrace {
+			inBrace = false
+		} else if ch == '{' {
+			re += "[^/]+"
+			inBrace = true
+		} else if inBrace {
+			// skip brace contents (e.g. "id" in "{id}")
+		} else if ch == '*' {
 			re += ".*"
-		case '{', '}':
-			// skip
-		default:
+		} else {
 			re += string(ch)
 		}
 	}
 	re += "$"
-	// {id} segments are replaced by [^/]+
-	re = strings.ReplaceAll(re, "[^/]+", "[^/]+")
-	// Normalize remaining asterisks
-	re = strings.ReplaceAll(re, ".*", ".*")
 	return re
 }
 
@@ -139,6 +151,15 @@ func (r *RBAC) Check(role, path, method string) error {
 		return err
 	}
 	if !allowed {
+		// Debug: log which patterns exist for this role
+		fmt.Printf("[RBAC DEBUG] role=%q path=%q method=%q → denied, policies:\n", role, path, method)
+		for _, p := range r.policies {
+			if p.role == role {
+				re := patternToRegex(p.path)
+				m, _ := regexp.MatchString(re, path)
+				fmt.Printf("  pattern=%q regex=%q match=%v\n", p.path, re, m)
+			}
+		}
 		return ErrForbidden
 	}
 	return nil

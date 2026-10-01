@@ -534,13 +534,13 @@ func (s *SessionService) GetMessages(ctx context.Context, sessionID uuid.UUID, l
 	var err error
 	if before != "" {
 		err = s.db.SelectContext(ctx, &rows,
-			`SELECT id, role, content, model, finish_reason, token_count, created_at
+			`SELECT id, role, content, model, COALESCE(finish_reason,'') AS finish_reason, COALESCE(token_count,0) AS token_count, created_at
 			 FROM messages WHERE session_id=$1 AND id < $2
 			 ORDER BY created_at DESC LIMIT $3`,
 			sessionID, before, limit)
 	} else {
 		err = s.db.SelectContext(ctx, &rows,
-			`SELECT id, role, content, model, finish_reason, token_count, created_at
+			`SELECT id, role, content, model, COALESCE(finish_reason,'') AS finish_reason, COALESCE(token_count,0) AS token_count, created_at
 			 FROM messages WHERE session_id=$1
 			 ORDER BY created_at DESC LIMIT $2`,
 			sessionID, limit)

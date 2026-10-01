@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"fashionai/api-gateway/internal/middleware"
 	"fashionai/api-gateway/internal/model"
@@ -23,10 +24,11 @@ import (
 type ChatHandler struct {
 	chatSvc *service.ChatService
 	jwtSvc  *auth.JWTService
+	sessSvc *service.SessionService
 }
 
-func NewChatHandler(chatSvc *service.ChatService, jwtSvc *auth.JWTService) *ChatHandler {
-	return &ChatHandler{chatSvc: chatSvc, jwtSvc: jwtSvc}
+func NewChatHandler(chatSvc *service.ChatService, jwtSvc *auth.JWTService, sessSvc *service.SessionService) *ChatHandler {
+	return &ChatHandler{chatSvc: chatSvc, jwtSvc: jwtSvc, sessSvc: sessSvc}
 }
 
 // allowedOrigins is comma-separated; falls back to a single entry for local dev.
@@ -68,8 +70,8 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 		req.Model = "qwen3.8-flash"
 	}
 	switch req.Model {
-	case "gpt-4o", "fashion-ai-default", "qwen-plus":
-		req.Model = "qwen3.8-flash"
+	case "gpt-4o", "qwen3.8", "qwen3.8-flash", "qwen3.8-max", "qwen-plus", "fashion-ai-default":
+		req.Model = "deepseek-v4-pro"
 	}
 
 	isStream := req.Stream != nil && *req.Stream
@@ -81,6 +83,15 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 		userID, orgID, deptID, role = claims.Subject, claims.OrgID, claims.DeptID, claims.Role
 	}
 
+	// ── Message persistence: extract session_id from ExtraBody ──
+	sessionIDStr, _ := req.ExtraBody["session_id"].(string)
+	var sessionID uuid.UUID
+	hasSession := sessionIDStr != ""
+	if hasSession {
+		sessionID, _ = uuid.Parse(sessionIDStr)
+		hasSession = sessionID != uuid.Nil
+	}
+
 	// T-022: SSE timeout. Read SSE_WRITE_TIMEOUT_SECS from env (default 600s) so long
 	// streams are not cut by the server. WriteTimeout on the http.Server stays 0.
 	sseWriteSecs := 600
@@ -90,19 +101,50 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(sseWriteSecs)*time.Second)
 	defer cancel()
 
-	resp, err := h.chatSvc.ProxyRequestWithContext(ctx, req, userID, orgID, deptID, role, middleware.GetClientIP(r))
-	if err != nil {
-		log.Printf("[chat completions] ProxyRequestWithContext error: %v", err)
-		writeError(w, http.StatusBadGateway, "UPSTREAM_ERROR", "failed to reach core service")
-		return
-	}
-	defer resp.Body.Close()
+	var resp *http.Response
+	var err error
 
-	log.Printf("[chat completions] core status=%d", resp.StatusCode)
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		log.Printf("[chat completions] core non-200: status=%d body=%s", resp.StatusCode, string(bodyBytes))
-		resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	// ── Direct LLM call: skip Rust core, call BerryPi token-plan gateway ──
+	berrypiKey := os.Getenv("BERRYPI_API_KEY")
+	berrypiURL := os.Getenv("BERRYPI_BASE_URL")
+	if berrypiKey != "" && berrypiURL != "" {
+		// rewrite model name
+		switch req.Model {
+		case "deepseek-v4-pro", "deepseek-v4-flash", "qwen3.8-max", "qwen-plus", "fashion-ai-default", "gpt-4o", "qwen3.8", "qwen3.8-flash":
+			req.Model = "deepseek-v4-flash"
+		}
+		bodyBytes, _ := json.Marshal(req)
+		coreReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, berrypiURL+"/v1/chat/completions", bytes.NewReader(bodyBytes))
+		coreReq.Header.Set("Content-Type", "application/json")
+		coreReq.Header.Set("Authorization", "Bearer "+berrypiKey)
+		resp, err = http.DefaultClient.Do(coreReq)
+		if err != nil {
+			log.Printf("[chat completions] BerryPi error: %v", err)
+			writeError(w, http.StatusBadGateway, "UPSTREAM_ERROR", "failed to reach BerryPi")
+			return
+		}
+		defer resp.Body.Close()
+		log.Printf("[chat completions] BerryPi status=%d", resp.StatusCode)
+		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			log.Printf("[chat completions] BerryPi non-200: status=%d body=%s", resp.StatusCode, string(bodyBytes))
+			resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		}
+	} else {
+		// fallback to Rust core
+		resp, err = h.chatSvc.ProxyRequestWithContext(ctx, req, userID, orgID, deptID, role, middleware.GetClientIP(r))
+		if err != nil {
+			log.Printf("[chat completions] ProxyRequestWithContext error: %v", err)
+			writeError(w, http.StatusBadGateway, "UPSTREAM_ERROR", "failed to reach core service")
+			return
+		}
+		defer resp.Body.Close()
+		log.Printf("[chat completions] core status=%d", resp.StatusCode)
+		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			log.Printf("[chat completions] core non-200: status=%d body=%s", resp.StatusCode, string(bodyBytes))
+			resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		}
 	}
 
 	if isStream {
@@ -117,25 +159,97 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Persist user message (last user msg in history)
+		if hasSession && h.sessSvc != nil {
+			for i := len(req.Messages) - 1; i >= 0; i-- {
+				if req.Messages[i].Role == "user" && req.Messages[i].Content != "" {
+					if err := h.sessSvc.SaveMessage(ctx, sessionID, "user", req.Messages[i].Content, req.Model); err != nil {
+						log.Printf("[chat completions] SaveMessage(user) error: %v", err)
+					}
+					break
+				}
+			}
+		}
+
 		buf := make([]byte, 4096)
 		first := true
+		var assistantBuf bytes.Buffer
 		for {
-			n, err := resp.Body.Read(buf)
+			n, readErr := resp.Body.Read(buf)
 			if n > 0 {
 				log.Printf("[chat completions] streaming chunk len=%d first=%v", n, first)
 				_, _ = w.Write(buf[:n])
 				flusher.Flush()
 				first = false
+				assistantBuf.Write(buf[:n])
 			}
-			if err != nil {
-				log.Printf("[chat completions] stream ended err=%v", err)
+			if readErr != nil {
+				log.Printf("[chat completions] stream ended err=%v", readErr)
 				break
 			}
 		}
+
+		// Parse accumulated SSE → extract assistant content
+		if hasSession && h.sessSvc != nil {
+			fullText := parseSSEAssistantContent(assistantBuf.String())
+			if fullText != "" {
+				if err := h.sessSvc.SaveMessage(ctx, sessionID, "assistant", fullText, req.Model); err != nil {
+					log.Printf("[chat completions] SaveMessage(assistant) error: %v", err)
+				}
+			}
+		}
 	} else {
+		if hasSession && h.sessSvc != nil {
+			for i := len(req.Messages) - 1; i >= 0; i-- {
+				if req.Messages[i].Role == "user" && req.Messages[i].Content != "" {
+					if err := h.sessSvc.SaveMessage(ctx, sessionID, "user", req.Messages[i].Content, req.Model); err != nil {
+						log.Printf("[chat completions] SaveMessage(user) error: %v", err)
+					}
+					break
+				}
+			}
+		}
+
+		var buf bytes.Buffer
+		io.Copy(&buf, resp.Body)
 		w.Header().Set("Content-Type", "application/json")
-		io.Copy(w, resp.Body)
+		w.Write(buf.Bytes())
+
+		if hasSession && h.sessSvc != nil {
+			var chatResp model.ChatCompletionResponse
+			if json.Unmarshal(buf.Bytes(), &chatResp) == nil && len(chatResp.Choices) > 0 {
+				assistantText := chatResp.Choices[0].Message.Content
+				if assistantText != "" {
+					if err := h.sessSvc.SaveMessage(ctx, sessionID, "assistant", assistantText, req.Model); err != nil {
+						log.Printf("[chat completions] SaveMessage(assistant) error: %v", err)
+					}
+				}
+			}
+		}
 	}
+}
+
+// parseSSEAssistantContent parses OpenAI SSE stream and extracts assistant message content.
+func parseSSEAssistantContent(sseData string) string {
+	var sb strings.Builder
+	lines := strings.Split(sseData, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "[DONE]" {
+			break
+		}
+		var chunk model.ChatStreamResponse
+		if json.Unmarshal([]byte(payload), &chunk) == nil && len(chunk.Choices) > 0 {
+			if chunk.Choices[0].Delta.Content != "" {
+				sb.WriteString(chunk.Choices[0].Delta.Content)
+			}
+		}
+	}
+	return sb.String()
 }
 
 // Models handles GET /v1/models.
@@ -247,5 +361,3 @@ func (h *PingPongHandler) Ping(w http.ResponseWriter, r *http.Request) {
 func normalizePath(template string) string {
 	return strings.ReplaceAll(template, "{id}", "*")
 }
-
-

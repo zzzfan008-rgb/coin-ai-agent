@@ -132,7 +132,7 @@ func main() {
 		projectH = handler.NewProjectHandler(projectSvc)
 		mcpH2    = handler.NewMcpHandler(mcpSvc)
 	}
-	chatH = handler.NewChatHandler(chatSvc, jwtSvc)
+	chatH = handler.NewChatHandler(chatSvc, jwtSvc, sessionSvc)
 	healthH = handler.NewHealthHandler(chatSvc)
 
 	// ── Router ───────────────────────────────────────────────────────────────
