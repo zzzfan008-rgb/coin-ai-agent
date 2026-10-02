@@ -29,6 +29,8 @@ export function useChat(initialSessionId?: string) {
   const [loaded, setLoaded] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
+  // T-022: consecutive stream-reconnect attempts (max 3), reset on success.
+  const retryAttemptRef = useRef(0)
 
   const loadSession = useCallback(
     async (s: Session) => {
@@ -180,6 +182,9 @@ export function useChat(initialSessionId?: string) {
           signal: controller.signal,
         })
         patchAssistant((m) => ({ ...m, content: text }))
+        // Successful stream: reset the reconnect-attempt counter so later
+        // unrelated disconnects get a fresh backoff budget.
+        retryAttemptRef.current = 0
       } catch (e) {
         if (controller.signal.aborted) {
           patchAssistant((m) => ({
@@ -216,14 +221,24 @@ export function useChat(initialSessionId?: string) {
     [messages, isStreaming, currentSession, selectedSkillIds, refreshSessions],
   )
 
-  // T-022: manual reconnect for a stream that dropped mid-reply.
+  // T-022: manual reconnect with exponential backoff (max 3 attempts).
   // Resends the last user message to re-establish the stream.
   const retryStream = useCallback(async () => {
     if (!streamDisconnected || messages.length === 0 || isStreaming) return
+    const attempt = retryAttemptRef.current
+    if (attempt >= 3) {
+      setStreamDisconnected(false)
+      retryAttemptRef.current = 0
+      setError('连接中断，请检查网络后手动刷新页面重试')
+      return
+    }
     const lastUser = [...messages].reverse().find((m) => m.role === 'user')
     if (lastUser) {
+      retryAttemptRef.current = attempt + 1
       setStreamDisconnected(false)
       setError(null)
+      // exponential backoff: 1s, 2s, 4s
+      await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)))
       await sendMessage(lastUser.content)
     }
   }, [streamDisconnected, messages, isStreaming, sendMessage])

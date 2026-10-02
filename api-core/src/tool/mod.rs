@@ -39,13 +39,23 @@ pub async fn execute_tool(
 }
 
 async fn execute_mcp_tool(mcp_tool: &str, args: &Value) -> AppResult<String> {
-    // Phase 1B: HTTP POST to MCP server /tools/{mcp_tool}/invoke
-    tracing::info!(mcp_tool = %mcp_tool, "Executing MCP tool (stub)");
-    Ok(serde_json::json!({
-        "status": "ok",
-        "mcp_tool": mcp_tool,
-        "args": args,
-        "message": "MCP tool stub — Phase 1B"
-    })
-    .to_string())
+    // mcp_tool format: "{server_id}/{tool_name}"
+    let (server_id, tool_name) = match mcp_tool.split_once('/') {
+        Some((sid, tn)) => (sid, tn),
+        None => {
+            return Err(crate::error::AppError::BadRequest(format!(
+                "MCP tool name must be server_id/tool_name, got {mcp_tool}"
+            )));
+        }
+    };
+
+    tracing::info!(server_id, tool_name, "Executing MCP tool via global manager");
+
+    crate::mcp::MCP_MANAGER
+        .invoke(server_id, tool_name, args.clone())
+        .await
+        .map_err(|e| {
+            tracing::error!(server_id, tool_name, error = %e, "MCP tool invocation failed");
+            crate::error::AppError::Internal(format!("MCP tool {mcp_tool} failed: {e}"))
+        })
 }

@@ -138,3 +138,15 @@ bin/
 # local start helpers
 api-core/start-tokenplan.sh
 api-core/start-with-token-plan.sh
+
+# ── Root-level tooling artifacts (gitnexus, rust build) ────────────────────────
+node_modules/
+target/
+package-lock.json
+
+# ── GitNexus auto-generated agent configs ─────────────────────────────────────
+AGENTS.md
+CLAUDE.md
+
+# dev service logs (make dev)
+dev-*.log
