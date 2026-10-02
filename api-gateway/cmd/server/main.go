@@ -47,9 +47,9 @@ func main() {
 	var dbErr error
 	if cfg.DatabaseURL != "" {
 		pool, dbErr = db.Open(db.Config{
-			DatabaseURL:    cfg.DatabaseURL,
-			MaxOpenConns:   25,
-			MaxIdleConns:   5,
+			DatabaseURL:     cfg.DatabaseURL,
+			MaxOpenConns:    25,
+			MaxIdleConns:    5,
 			ConnMaxLifetime: 5 * time.Minute,
 		})
 		if dbErr != nil {
@@ -90,47 +90,47 @@ func main() {
 	}
 
 	var (
-		authSvc     *service.AuthService
-		userSvc      *service.UserService
-		deptSvc      *service.DeptService
-		roleSvc      *service.RoleService
-		sessionSvc    *service.SessionService
-		projectSvc    *service.ProjectService
-		auditSvc     *service.AuditService
-		mcpSvc       *service.McpService
-		chatH        *handler.ChatHandler
+		authSvc    *service.AuthService
+		userSvc    *service.UserService
+		deptSvc    *service.DeptService
+		roleSvc    *service.RoleService
+		sessionSvc *service.SessionService
+		projectSvc *service.ProjectService
+		auditSvc   *service.AuditService
+		mcpSvc     *service.McpService
+		chatH      *handler.ChatHandler
 	)
 	if pool != nil {
-		authSvc     = service.NewAuthService(pool, jwtSvc, cfg.CookieSecure)
-		userSvc     = service.NewUserService(pool)
-		deptSvc     = service.NewDeptService(pool)
-		roleSvc     = service.NewRoleService(pool)
-		sessionSvc  = service.NewSessionService(pool)
-		projectSvc  = service.NewProjectService(pool)
-		auditSvc    = service.NewAuditService(pool)
-		mcpSvc      = service.NewMcpService(pool)
+		authSvc = service.NewAuthService(pool, jwtSvc, cfg.CookieSecure)
+		userSvc = service.NewUserService(pool)
+		deptSvc = service.NewDeptService(pool)
+		roleSvc = service.NewRoleService(pool)
+		sessionSvc = service.NewSessionService(pool)
+		projectSvc = service.NewProjectService(pool)
+		auditSvc = service.NewAuditService(pool)
+		mcpSvc = service.NewMcpService(pool)
 	}
 
 	chatSvc := service.NewChatService(cfg.RustCoreURL)
 
 	// ── Handlers ─────────────────────────────────────────────────────────────
-	var authH    *handler.AuthHandler
-	var userH    *handler.UserHandler
-	var deptH    *handler.DeptHandler
-	var roleH    *handler.RoleHandler
+	var authH *handler.AuthHandler
+	var userH *handler.UserHandler
+	var deptH *handler.DeptHandler
+	var roleH *handler.RoleHandler
 	var sessionH *handler.SessionHandler
 	var projectH *handler.ProjectHandler
-	var mcpH2    *handler.McpHandler
-	var healthH  *handler.HealthHandler
+	var mcpH2 *handler.McpHandler
+	var healthH *handler.HealthHandler
 
 	if pool != nil {
-		authH    = handler.NewAuthHandler(authSvc, auditSvc)
-		userH    = handler.NewUserHandler(userSvc)
-		deptH    = handler.NewDeptHandler(deptSvc)
-		roleH    = handler.NewRoleHandler(roleSvc)
+		authH = handler.NewAuthHandler(authSvc, auditSvc)
+		userH = handler.NewUserHandler(userSvc)
+		deptH = handler.NewDeptHandler(deptSvc)
+		roleH = handler.NewRoleHandler(roleSvc)
 		sessionH = handler.NewSessionHandler(sessionSvc, chatSvc)
 		projectH = handler.NewProjectHandler(projectSvc)
-		mcpH2    = handler.NewMcpHandler(mcpSvc)
+		mcpH2 = handler.NewMcpHandler(mcpSvc)
 	}
 	chatH = handler.NewChatHandler(chatSvc, jwtSvc, sessionSvc)
 	healthH = handler.NewHealthHandler(chatSvc, pool)
@@ -144,14 +144,13 @@ func main() {
 			if rawPath == "" {
 				rawPath = req.URL.Path
 			}
-if strings.Contains(rawPath, "..") {
+			if strings.Contains(rawPath, "..") {
 				http.NotFound(w, req)
 				return
 			}
 			next.ServeHTTP(w, req)
 		})
 	})
-
 
 	// Recovery + Request ID middleware (func(http.Handler) http.Handler)
 	r.Use(func(next http.Handler) http.Handler {
@@ -213,6 +212,7 @@ if strings.Contains(rawPath, "..") {
 	// Authenticated API routes
 	if userH != nil && deptH != nil && roleH != nil && sessionH != nil && projectH != nil {
 		api := r.PathPrefix("/api").Subrouter()
+		api.Use(middleware.DBGuard(pool)) // DB down → 503 degraded, fail fast
 		api.Use(jwtMw)
 		api.Use(rlMw)
 		api.Use(rbacMw)
@@ -278,6 +278,7 @@ if strings.Contains(rawPath, "..") {
 
 		// OpenAI-compatible routes
 		v1 := r.PathPrefix("/v1").Subrouter()
+		v1.Use(middleware.DBGuard(pool)) // DB down → 503 degraded, fail fast
 		v1.Use(jwtMw)
 		v1.Use(rlMw)
 		v1.Use(rbacMw)
@@ -313,7 +314,7 @@ if strings.Contains(rawPath, "..") {
 						rawPath = r.URL.Path // fallback if no escaping needed
 					}
 					if strings.Contains(rawPath, "..") {
-http.NotFound(w, r)
+						http.NotFound(w, r)
 						return
 					}
 					clean := filepath.Clean(r.URL.Path)
@@ -347,69 +348,69 @@ http.NotFound(w, r)
 			// so a hypothetical future middleware cannot re-introduce traversal.
 			clean := filepath.Clean(r.URL.Path)
 			// // rawPath preserves ".." that Clean() normalizes away.
-				// Block if any segment tried to escape the webDist namespace.
-				rawPath := r.URL.RawPath
-				if rawPath == "" {
-					rawPath = r.URL.Path
-				}
-				if strings.Contains(rawPath, "..") {
-					log.Printf("[MIDDLEWARE] BLOCKED path traversal: rawPath=%q path=%q", rawPath, r.URL.Path)
-					http.NotFound(w, r)
-					return
-				}
-				// Block normalized paths that look like OS system paths.
-				// e.g. /uploads/../etc/passwd -> /etc/passwd (Go normalized it).
-				// Normal app paths like /assets, /uploads are handled by the SPA handler.
-				if r.URL.Path != "/" && strings.HasPrefix(r.URL.Path, string(os.PathSeparator)) {
-					for _, prefix := range []string{"/etc", "/var", "/usr", "/tmp", "/root", "/home", "/sys", "/proc", "/dev", "/boot"} {
-						if strings.HasPrefix(r.URL.Path, prefix) {
-							log.Printf("[MIDDLEWARE] BLOCKED system path: path=%q rawPath=%q", r.URL.Path, r.URL.RawPath)
-							http.NotFound(w, r)
-							return
-						}
+			// Block if any segment tried to escape the webDist namespace.
+			rawPath := r.URL.RawPath
+			if rawPath == "" {
+				rawPath = r.URL.Path
+			}
+			if strings.Contains(rawPath, "..") {
+				log.Printf("[MIDDLEWARE] BLOCKED path traversal: rawPath=%q path=%q", rawPath, r.URL.Path)
+				http.NotFound(w, r)
+				return
+			}
+			// Block normalized paths that look like OS system paths.
+			// e.g. /uploads/../etc/passwd -> /etc/passwd (Go normalized it).
+			// Normal app paths like /assets, /uploads are handled by the SPA handler.
+			if r.URL.Path != "/" && strings.HasPrefix(r.URL.Path, string(os.PathSeparator)) {
+				for _, prefix := range []string{"/etc", "/var", "/usr", "/tmp", "/root", "/home", "/sys", "/proc", "/dev", "/boot"} {
+					if strings.HasPrefix(r.URL.Path, prefix) {
+						log.Printf("[MIDDLEWARE] BLOCKED system path: path=%q rawPath=%q", r.URL.Path, r.URL.RawPath)
+						http.NotFound(w, r)
+						return
 					}
 				}
-				// Strip leading "/" so that filepath.Join does not discard webDist.
-				// e.g. "/etc/passwd" -> "etc/passwd", "/assets/index.js" -> "assets/index.js", "/" -> "".
-				cleanLocal := clean
-				if strings.HasPrefix(cleanLocal, string(os.PathSeparator)) {
-					cleanLocal = cleanLocal[1:]
-				}
-				// Robust containment: Join + EvalSymlinks catches traversal like /uploads/../etc/passwd.
-				// Without EvalSymlinks, Join("/dist", "etc/passwd")="/dist/etc/passwd" (no .. left to resolve)
-				// and the simple HasPrefix check passes when it should not.
-				resolvedPath := filepath.Join(webDist, cleanLocal)
-				if absClean, err := filepath.EvalSymlinks(resolvedPath); err == nil {
-					resolvedPath = absClean
-				}
-				webDistAbs, _ := filepath.EvalSymlinks(webDist)
-				// Normalize both to remove trailing slashes before prefix check.
-				resolvedPath = filepath.Clean(resolvedPath)
-				webDistAbs = filepath.Clean(webDistAbs)
-				// Normalized both sides (Clean removed trailing /). Check: is resolvedPath inside webDistAbs?
-				if !strings.HasPrefix(resolvedPath, webDistAbs) || (resolvedPath != webDistAbs && !strings.HasPrefix(resolvedPath[len(webDistAbs):], "/")) {
-					log.Printf("[SPA] BLOCKED path traversal: resolved=%q not in webDist=%q", resolvedPath, webDistAbs)
-					http.NotFound(w, r)
-					return
-				}
-				// Serve real files as-is (assets, fonts, favicon, etc.);
-				// http.ServeFile returns 404 if the file doesn't exist.
-				info, err := os.Stat(resolvedPath)
-				if err == nil && !info.IsDir() {
-					http.ServeFile(w, r, resolvedPath)
-					return
-				}
-				// SPA fallback: index.html for client-side routing
-				http.ServeFile(w, r, webDist+"/index.html")
+			}
+			// Strip leading "/" so that filepath.Join does not discard webDist.
+			// e.g. "/etc/passwd" -> "etc/passwd", "/assets/index.js" -> "assets/index.js", "/" -> "".
+			cleanLocal := clean
+			if strings.HasPrefix(cleanLocal, string(os.PathSeparator)) {
+				cleanLocal = cleanLocal[1:]
+			}
+			// Robust containment: Join + EvalSymlinks catches traversal like /uploads/../etc/passwd.
+			// Without EvalSymlinks, Join("/dist", "etc/passwd")="/dist/etc/passwd" (no .. left to resolve)
+			// and the simple HasPrefix check passes when it should not.
+			resolvedPath := filepath.Join(webDist, cleanLocal)
+			if absClean, err := filepath.EvalSymlinks(resolvedPath); err == nil {
+				resolvedPath = absClean
+			}
+			webDistAbs, _ := filepath.EvalSymlinks(webDist)
+			// Normalize both to remove trailing slashes before prefix check.
+			resolvedPath = filepath.Clean(resolvedPath)
+			webDistAbs = filepath.Clean(webDistAbs)
+			// Normalized both sides (Clean removed trailing /). Check: is resolvedPath inside webDistAbs?
+			if !strings.HasPrefix(resolvedPath, webDistAbs) || (resolvedPath != webDistAbs && !strings.HasPrefix(resolvedPath[len(webDistAbs):], "/")) {
+				log.Printf("[SPA] BLOCKED path traversal: resolved=%q not in webDist=%q", resolvedPath, webDistAbs)
+				http.NotFound(w, r)
+				return
+			}
+			// Serve real files as-is (assets, fonts, favicon, etc.);
+			// http.ServeFile returns 404 if the file doesn't exist.
+			info, err := os.Stat(resolvedPath)
+			if err == nil && !info.IsDir() {
+				http.ServeFile(w, r, resolvedPath)
+				return
+			}
+			// SPA fallback: index.html for client-side routing
+			http.ServeFile(w, r, webDist+"/index.html")
 		}))
 		log.Println("[SPA] serving built frontend from:", webDist, "at / (fallback)")
 	}
 
 	// ── Server ────────────────────────────────────────────────────────────────
 	srv := &http.Server{
-		Addr:         ":" + cfg.Port,
-		Handler:      r,
-		ReadTimeout:  15 * time.Second,
+		Addr:        ":" + cfg.Port,
+		Handler:     r,
+		ReadTimeout: 15 * time.Second,
 		// WriteTimeout 需覆盖 dreamina 生图/生视频全流程（提交+轮询最长 120s+LLM 总结），
 		// 0 = 不限制（由前端 abort 控制生命周期）
 		WriteTimeout: 0,
