@@ -2,3 +2,7 @@ node_modules/
 dist/
 *.local
 .vite/
+# tsc -b incremental artifacts + emitted decls for vite.config.ts
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts

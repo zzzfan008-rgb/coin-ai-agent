@@ -81,6 +81,9 @@ docker-compose.override.yml
 .env
 .env.local
 .env.*.local
+.env.bak
+.env.bak-*
+.env.*.bak
 # 注意: .env.example 是无密钥模板，必须提交（不要忽略）
 
 # ── IDE ───────────────────────────────────────────────────────────────────────
@@ -121,6 +124,7 @@ coverage/
 # ── MinIO / Local storage ─────────────────────────────────────────────────────
 minio-data/
 qdrant-data/
+data/
 
 # ── Temporary files ───────────────────────────────────────────────────────────
 *.tmp
@@ -142,11 +146,10 @@ api-core/start-with-token-plan.sh
 # ── Root-level tooling artifacts (gitnexus, rust build) ────────────────────────
 node_modules/
 target/
-package-lock.json
 
 # ── GitNexus auto-generated agent configs ─────────────────────────────────────
-AGENTS.md
-CLAUDE.md
+/AGENTS.md
+/CLAUDE.md
 
 # dev service logs (make dev)
 dev-*.log
