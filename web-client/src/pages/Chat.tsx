@@ -20,7 +20,7 @@ export default function Chat() {
   const params = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
-  const { openSidebar, setCurrentSessionId } = useLayout()
+  const { openSidebar, setCurrentSessionId, refreshAll } = useLayout()
 
   const chat = useChat(params.id)
   const [skillPanelOpen, setSkillPanelOpen] = useState(false)
@@ -48,13 +48,25 @@ export default function Chat() {
     setCurrentSessionId(chat.currentSession?.id)
   }, [chat.currentSession?.id, setCurrentSessionId])
 
+  // 流式回复完成后，同步侧边栏会话列表（updated_at / title 变化）
+  const prevStreaming = useRef(false)
+  useEffect(() => {
+    if (prevStreaming.current && !chat.isStreaming) {
+      void refreshAll()
+    }
+    prevStreaming.current = chat.isStreaming
+  }, [chat.isStreaming, refreshAll])
+
   // ?new=1：创建新会话
   const wantNew = searchParams.get('new') === '1'
   useEffect(() => {
     if (!wantNew || !chat.loaded || chat.isStreaming) return
     void (async () => {
       const s = await chat.newSession()
-      if (s) navigate(`/sessions/${s.id}`, { replace: true })
+      if (s) {
+        void refreshAll()   // 同步侧边栏会话列表
+        navigate(`/sessions/${s.id}`, { replace: true })
+      }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wantNew, chat.loaded, chat.isStreaming])
