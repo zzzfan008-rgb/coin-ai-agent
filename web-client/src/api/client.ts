@@ -498,28 +498,46 @@ export async function streamChatCompletion(
   params: StreamChatParams,
   onDelta: (chunk: string) => void,
 ): Promise<string> {
-  const res = await fetch('/v1/chat/completions', {
-    method: 'POST',
-    credentials: 'include', // send httpOnly cookie for /v1/* (Bearer fallback also works)
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: params.model ?? 'fashion-ai-default',
-      messages: params.messages,
-      stream: true,
-      extra_body: {
-        session_id: params.sessionId ?? null,
-        skill_ids: params.skillIds ?? [],
-        mcp_server_ids: [],
-        knowledge_collections: [],
-      },
-    }),
-    signal: params.signal,
-  })
+  // Connect-phase timeout only: aborts if no response headers within 60s.
+  // Cleared once headers arrive so long streaming replies (skill/RAG turns
+  // regularly exceed 60s) are never cut off mid-stream; mid-stream stalls
+  // are governed by the per-chunk 30s idle timeout below.
+  const connectController = new AbortController()
+  const connectTimer = setTimeout(() => connectController.abort(), 60_000)
+  const combinedSignal = params.signal
+    ? AbortSignal.any([params.signal, connectController.signal])
+    : connectController.signal
 
-  console.log('[SSE] fetch completed:', res.status, res.statusText, 'CT:', res.headers.get('content-type'), 'body:', res.body !== null)
+  let res: Response
+  try {
+    res = await fetch('/v1/chat/completions', {
+      method: 'POST',
+      credentials: 'include', // send httpOnly cookie for /v1/* (Bearer fallback also works)
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: params.model ?? 'fashion-ai-default',
+        messages: params.messages,
+        stream: true,
+        extra_body: {
+          session_id: params.sessionId ?? null,
+          skill_ids: params.skillIds ?? [],
+          mcp_server_ids: [],
+          knowledge_collections: [],
+        },
+      }),
+      signal: combinedSignal,
+    })
+  } catch (err) {
+    if (connectController.signal.aborted && !params.signal?.aborted) {
+      throw new Error('连接超时：60 秒内未收到服务器响应，请重试')
+    }
+    throw err
+  } finally {
+    clearTimeout(connectTimer)
+  }
+
   if (!res.ok) {
     const err = await readError(res)
-    console.log('[SSE] non-ok fetch error:', err)
     throw err
   }
   if (!res.body) throw new Error('浏览器不支持流式响应（ReadableStream）')
@@ -548,9 +566,46 @@ export async function streamChatCompletion(
     }
   }
 
+  // Stream reader: per-chunk 30s idle timeout, 60s total stall before the
+  // stream is declared dead. The pending read() is carried across timeout
+  // iterations so a stall-then-resume never drops a chunk (a re-issued
+  // read() would orphan the first pending one and lose its chunk). The
+  // buffer is flushed exactly once, on real stream end.
+  const IDLE_TIMEOUT = Symbol('idle-timeout')
+  let pending: Promise<ReadableStreamReadResult<Uint8Array>> | null = null
+  let idleMs = 0
   for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
+    if (!pending) pending = reader.read()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const chunk = await Promise.race([
+      pending,
+      new Promise<typeof IDLE_TIMEOUT>((resolve) => {
+        timer = setTimeout(() => resolve(IDLE_TIMEOUT), 30_000)
+      }),
+    ])
+    if (timer !== undefined) clearTimeout(timer)
+
+    if (chunk === IDLE_TIMEOUT) {
+      // No data for 30s. The read stays pending; keep waiting up to 60s,
+      // then treat the stall as a disconnect (reconnect banner in UI).
+      idleMs += 30_000
+      if (idleMs >= 60_000) {
+        throw new Error('连接中断：流式响应超时（60 秒未收到数据）')
+      }
+      continue
+    }
+
+    pending = null
+    idleMs = 0
+    const { done, value } = chunk
+    if (done) {
+      // Real stream end: flush any trailing partial frame exactly once.
+      if (buffer.trim()) {
+        handleEvent(buffer)
+        buffer = ''
+      }
+      break
+    }
     buffer += decoder.decode(value, { stream: true })
     let sep: number
     while ((sep = buffer.indexOf('\n\n')) >= 0) {
@@ -558,7 +613,6 @@ export async function streamChatCompletion(
       buffer = buffer.slice(sep + 2)
     }
   }
-  if (buffer.trim()) handleEvent(buffer)
 
   return full
 }

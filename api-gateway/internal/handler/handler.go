@@ -10,6 +10,11 @@ import (
 	"fashionai/api-gateway/internal/middleware"
 	"fashionai/api-gateway/internal/model"
 	"fashionai/api-gateway/internal/service"
+
+	"github.com/jmoiron/sqlx"
+	"context"
+	"time"
+
 )
 
 type AuthHandler struct {
@@ -525,10 +530,11 @@ func (h *SessionHandler) GetMessages(w http.ResponseWriter, r *http.Request) {
 // HealthHandler handles health check.
 type HealthHandler struct {
 	chatSvc *service.ChatService
+	db      *sqlx.DB
 }
 
-func NewHealthHandler(chatSvc *service.ChatService) *HealthHandler {
-	return &HealthHandler{chatSvc: chatSvc}
+func NewHealthHandler(chatSvc *service.ChatService, db *sqlx.DB) *HealthHandler {
+	return &HealthHandler{chatSvc: chatSvc, db: db}
 }
 
 // Health godoc
@@ -538,11 +544,30 @@ func NewHealthHandler(chatSvc *service.ChatService) *HealthHandler {
 // @Success 200 {object} model.HealthResponse
 // @Router /health [get]
 func (h *HealthHandler) Health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, model.HealthResponse{
-		Status:  "ok",
+	dbStatus := "ok"
+	httpStatus := http.StatusOK
+	if h.db != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := h.db.PingContext(ctx); err != nil {
+			dbStatus = "unreachable"
+			httpStatus = http.StatusServiceUnavailable
+		}
+	} else {
+		dbStatus = "unreachable"
+		httpStatus = http.StatusServiceUnavailable
+	}
+
+	overall := "ok"
+	if httpStatus == http.StatusServiceUnavailable {
+		overall = "degraded"
+	}
+
+	writeJSON(w, httpStatus, model.HealthResponse{
+		Status:  overall,
 		Version: "1.0.0",
 		Services: map[string]model.ServiceStatus{
-			"database":  {Status: "ok"},
+			"database":  {Status: dbStatus},
 			"redis":     {Status: "ok"},
 			"rust_core": {Status: "ok"},
 		},

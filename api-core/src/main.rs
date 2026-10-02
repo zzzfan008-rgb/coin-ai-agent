@@ -118,7 +118,42 @@ async fn main() -> Result<()> {
         );
     }
 
-    // ── SKILL Engine ────────────────────────────────────────────────────────────
+        // ── MCP Server registration ──────────────────────────────────────────
+    // Register active MCP servers from DB into the global manager.
+    // Failures are logged but non-fatal — MCP is an optional component.
+    {
+        let pool = session_store.pool();
+        match sqlx::query_as::<_, (uuid::Uuid, String, Option<String>, Option<String>)>(
+            "SELECT id, name, endpoint, auth_token FROM mcp_servers WHERE is_active = true",
+        )
+        .fetch_all(pool)
+        .await
+        {
+            Ok(rows) => {
+                for (id, name, endpoint, auth_token) in rows {
+                    let base_url = endpoint.unwrap_or_default();
+                    if base_url.is_empty() {
+                        tracing::warn!(%name, "MCP server has no endpoint, skipping");
+                        continue;
+                    }
+                    let cfg = crate::mcp::McpServerConfig {
+                        id: id.to_string(),
+                        name,
+                        base_url,
+                        auth_token,
+                    };
+                    crate::mcp::MCP_MANAGER.register(cfg).await;
+                }
+                let count = crate::mcp::MCP_MANAGER.server_ids().await.len();
+                tracing::info!("MCP servers registered: {count}");
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load MCP server configs: {e} — MCP disabled");
+            }
+        }
+    }
+
+// ── SKILL Engine ────────────────────────────────────────────────────────────
     // 不再只依赖 cwd/skills：按 SKILLS_DIR → 可执行文件相对 → 工作目录相对
     // 的顺序定位，避免从其它目录启动时找不到 skill。找不到时 load 会 fail-fast。
     let skills_dir = resolve_skills_dir();

@@ -133,7 +133,7 @@ func main() {
 		mcpH2    = handler.NewMcpHandler(mcpSvc)
 	}
 	chatH = handler.NewChatHandler(chatSvc, jwtSvc, sessionSvc)
-	healthH = handler.NewHealthHandler(chatSvc)
+	healthH = handler.NewHealthHandler(chatSvc, pool)
 
 	// ── Router ───────────────────────────────────────────────────────────────
 	r := mux.NewRouter()
