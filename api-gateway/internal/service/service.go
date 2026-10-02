@@ -529,6 +529,23 @@ func (s *SessionService) Update(ctx context.Context, orgID, sessionID uuid.UUID,
 	}, nil
 }
 
+func (s *SessionService) Delete(ctx context.Context, orgID, sessionID uuid.UUID) error {
+	result, err := s.db.ExecContext(ctx,
+		`DELETE FROM sessions WHERE id=$1 AND org_id=$2`,
+		sessionID, orgID)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrSessionNotFound
+	}
+	return nil
+}
+
 func (s *SessionService) GetMessages(ctx context.Context, sessionID uuid.UUID, limit int, before string) (*model.MessageList, error) {
 	rows := []model.MessageDTO{}
 	var err error

@@ -233,6 +233,7 @@ if strings.Contains(rawPath, "..") {
 		api.HandleFunc("/sessions", sessionH.Create).Methods(http.MethodPost)
 		api.HandleFunc("/sessions/{id}", sessionH.Get).Methods(http.MethodGet)
 		api.HandleFunc("/sessions/{id}", sessionH.Update).Methods(http.MethodPatch)
+		api.HandleFunc("/sessions/{id}", sessionH.Delete).Methods(http.MethodDelete)
 		api.HandleFunc("/sessions/{id}/messages", sessionH.GetMessages).Methods(http.MethodGet)
 
 		// Projects

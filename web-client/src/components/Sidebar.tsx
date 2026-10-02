@@ -10,7 +10,9 @@ import {
   Archive,
   BookOpen,
   Plug,
+  RotateCcw,
   Sparkles,
+  Trash2,
 } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -28,6 +30,10 @@ interface SidebarProps {
   onLogout: () => void
   onClose?: () => void
   disabled?: boolean
+  archivedSessions?: Session[]
+  onArchiveSession?: (id: string) => Promise<void> | void
+  onDeleteSession?: (id: string) => Promise<void> | void
+  onRestoreSession?: (id: string) => Promise<void> | void
 }
 
 function formatTime(iso: string): string {
@@ -52,6 +58,10 @@ export function Sidebar({
   onLogout,
   onClose,
   disabled,
+  archivedSessions = [],
+  onArchiveSession,
+  onDeleteSession,
+  onRestoreSession,
 }: SidebarProps) {
   const navigate = useNavigate()
   const location = useLocation()
@@ -122,7 +132,7 @@ export function Sidebar({
             sessions.map((s) => {
               const active = chatActive && s.id === currentSessionId
               return (
-                <li key={s.id}>
+                <li key={s.id} className="group relative">
                   <button
                     type="button"
                     onClick={() => navigate(`/sessions/${s.id}`)}
@@ -151,6 +161,36 @@ export function Sidebar({
                       <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
                     )}
                   </button>
+                  <span className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-lg bg-surface/95 p-0.5 opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+                    {onArchiveSession && (
+                      <button
+                        type="button"
+                        title="归档"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void onArchiveSession(s.id)
+                        }}
+                        className="rounded-md p-1 text-faint transition-colors hover:bg-surface-elevated hover:text-primary"
+                      >
+                        <Archive size={12} />
+                      </button>
+                    )}
+                    {onDeleteSession && (
+                      <button
+                        type="button"
+                        title="删除"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (window.confirm(`确定删除会话「${s.title || '未命名会话'}」？此操作不可恢复。`)) {
+                            void onDeleteSession(s.id)
+                          }
+                        }}
+                        className="rounded-md p-1 text-faint transition-colors hover:bg-error/10 hover:text-error"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    )}
+                  </span>
                 </li>
               )
             })
@@ -249,6 +289,73 @@ export function Sidebar({
                     </li>
                   )
                 })}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {/* 已归档会话（折叠） */}
+        {archivedSessions.length > 0 && (
+          <div className="mt-2">
+            <button
+              type="button"
+              onClick={() => setArchivedOpen((v) => !v)}
+              className="flex w-full items-center gap-1.5 rounded-xl px-2.5 py-2 text-left text-xs text-faint transition-colors hover:bg-surface-elevated hover:text-muted"
+            >
+              {archivedOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              <MessageSquare size={11} />
+              已归档会话（{archivedSessions.length}）
+            </button>
+            {archivedOpen && (
+              <ul className="space-y-0.5 pt-0.5">
+                {archivedSessions.map((s) => (
+                  <li key={s.id} className="group relative">
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/sessions/${s.id}`)}
+                      title={s.title}
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-faint transition-colors hover:bg-surface-elevated hover:text-muted"
+                    >
+                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-surface-elevated opacity-50">
+                        <MessageSquare size={11} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs">{s.title}</p>
+                        <p className="truncate text-[10px] text-faint">{formatTime(s.updated_at)}</p>
+                      </div>
+                    </button>
+                    <span className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-lg bg-surface/95 p-0.5 opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+                      {onRestoreSession && (
+                        <button
+                          type="button"
+                          title="恢复"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void onRestoreSession(s.id)
+                          }}
+                          className="rounded-md p-1 text-faint transition-colors hover:bg-surface-elevated hover:text-primary"
+                        >
+                          <RotateCcw size={12} />
+                        </button>
+                      )}
+                      {onDeleteSession && (
+                        <button
+                          type="button"
+                          title="删除"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (window.confirm(`确定删除会话「${s.title || '未命名会话'}」？此操作不可恢复。`)) {
+                              void onDeleteSession(s.id)
+                            }
+                          }}
+                          className="rounded-md p-1 text-faint transition-colors hover:bg-error/10 hover:text-error"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      )}
+                    </span>
+                  </li>
+                ))}
               </ul>
             )}
           </div>

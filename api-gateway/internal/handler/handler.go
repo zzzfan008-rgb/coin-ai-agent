@@ -458,6 +458,41 @@ func (h *SessionHandler) Update(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, session)
 }
 
+// Delete godoc
+// @Summary Delete a session
+// @Tags sessions
+// @Security BearerAuth
+// @Param id path string true "会话ID"
+// @Success 204 {object} map[string]string
+// @Failure 404 {object} model.ErrorResponse
+// @Router /api/sessions/{id} [delete]
+func (h *SessionHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID, err := parseUUID(vars["id"])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid session id")
+		return
+	}
+
+	claims := middleware.GetClaims(r.Context())
+	orgID, err := parseUUID(claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "INVALID_CLAIMS", "invalid org_id in token")
+		return
+	}
+
+	if err := h.svc.Delete(r.Context(), orgID, sessionID); err != nil {
+		if errors.Is(err, service.ErrSessionNotFound) {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "session not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to delete session")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // GetMessages godoc
 // @Summary 获取会话消息历史
 // @Tags sessions

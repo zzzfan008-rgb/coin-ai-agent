@@ -6,7 +6,12 @@ import {
 import { Outlet, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { useProjects } from '../hooks/useProjects'
-import { listSessions, type Session } from '../api/client'
+import {
+  listSessions,
+  updateSession,
+  deleteSession,
+  type Session,
+} from '../api/client'
 import { Sidebar } from './Sidebar'
 import { ProjectFormModal } from './ProjectFormModal'
 import { LayoutContext } from '../hooks/useLayout'
@@ -29,18 +34,59 @@ export function AppLayout() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
   const [sessions, setSessions] = useState<Session[]>([])
+  const [archivedSessions, setArchivedSessions] = useState<Session[]>([])
   const [currentSessionId, setCurrentSessionId] = useState<string | undefined>(
     params.id,
   )
 
   const reloadSessions = useCallback(async () => {
     try {
-      const { sessions: list } = await listSessions()
-      setSessions(list)
+      const [cur, archived] = await Promise.all([
+        listSessions(),
+        listSessions(true),
+      ])
+      setSessions(cur.sessions)
+      setArchivedSessions(archived.sessions)
     } catch {
       // sidebar session refresh is best-effort
     }
   }, [])
+
+  const handleArchiveSession = useCallback(
+    async (id: string) => {
+      try {
+        await updateSession(id, { is_archived: true })
+        await reloadSessions()
+      } catch {
+        // archive failure is surfaced by next reload
+      }
+    },
+    [reloadSessions],
+  )
+
+  const handleDeleteSession = useCallback(
+    async (id: string) => {
+      try {
+        await deleteSession(id)
+        await reloadSessions()
+      } catch {
+        // delete failure is surfaced by next reload
+      }
+    },
+    [reloadSessions],
+  )
+
+  const handleRestoreSession = useCallback(
+    async (id: string) => {
+      try {
+        await updateSession(id, { is_archived: false })
+        await reloadSessions()
+      } catch {
+        // restore failure is surfaced by next reload
+      }
+    },
+    [reloadSessions],
+  )
 
   useEffect(() => {
     void reloadSessions()
@@ -77,6 +123,10 @@ export function AppLayout() {
       onCreateProject={() => setShowCreate(true)}
       onLogout={logout}
       onClose={onClose}
+      archivedSessions={archivedSessions}
+      onArchiveSession={handleArchiveSession}
+      onDeleteSession={handleDeleteSession}
+      onRestoreSession={handleRestoreSession}
     />
   )
 

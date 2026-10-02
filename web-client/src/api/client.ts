@@ -193,8 +193,13 @@ export async function logout(): Promise<void> {
 
 // ── 会话接口 ────────────────────────────────────────────────────────────────
 
-export async function listSessions(): Promise<{ sessions: Session[]; total: number }> {
-  return apiFetch('/api/sessions?limit=50')
+export async function listSessions(archived = false): Promise<{ sessions: Session[]; total: number }> {
+  const suffix = archived ? '&archived=true' : ''
+  return apiFetch(`/api/sessions?limit=50${suffix}`)
+}
+
+export async function deleteSession(id: string): Promise<void> {
+  await apiFetch(`/api/sessions/${id}`, { method: 'DELETE' })
 }
 
 export async function createSession(title?: string): Promise<Session> {
