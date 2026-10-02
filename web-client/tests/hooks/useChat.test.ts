@@ -3,23 +3,24 @@
  *
  * 测试点：
  * 1. 初始化：创建新会话（无会话时）/ 加载已有会话
- * 2. 消息追加：sendMessage 乐观更新 + 流式回复
+ * 2. 消息追加：sendMessage 乐观更新 + 流式回复（SSE onDelta 逐块写入）
  * 3. 会话管理：newSession 创建新会话
+ * 4. T-022 重连：retryStream 退避重试上限 3 次，超出后提示手动刷新
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useChat } from '../../src/hooks/useChat'
 import * as client from '../../src/api/client'
 
 // ── Mock（必须用 vi.hoisted，vi.mock 工厂才能引用）─────────────────────────────
 
-const { mockListSessions, mockListMessages, mockCreateSession, mockChatCompletion } =
+const { mockListSessions, mockListMessages, mockCreateSession, mockStreamChatCompletion } =
   vi.hoisted(() => ({
     mockListSessions: vi.fn(),
     mockListMessages: vi.fn(),
     mockCreateSession: vi.fn(),
-    mockChatCompletion: vi.fn(),
+    mockStreamChatCompletion: vi.fn(),
   }))
 
 vi.mock('../../src/api/client', async (importOriginal) => {
@@ -29,7 +30,7 @@ vi.mock('../../src/api/client', async (importOriginal) => {
     listSessions: mockListSessions,
     listMessages: mockListMessages,
     createSession: mockCreateSession,
-    chatCompletion: mockChatCompletion,
+    streamChatCompletion: mockStreamChatCompletion,
   }
 })
 
@@ -57,6 +58,16 @@ const fakeMessages = [
     created_at: '2024-01-01T00:01:00Z',
   },
 ]
+
+// 模拟 SSE 正常完成：逐块回调 onDelta 后返回全文
+function okStream(fullText: string, chunkSize = 5) {
+  return (_params: unknown, onDelta: (c: string) => void) => {
+    for (let i = 0; i < fullText.length; i += chunkSize) {
+      onDelta(fullText.slice(i, i + chunkSize))
+    }
+    return Promise.resolve(fullText)
+  }
+}
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
@@ -113,7 +124,7 @@ describe('useChat 消息追加', () => {
   })
 
   it('sendMessage 乐观追加用户消息', async () => {
-    mockChatCompletion.mockImplementation(() => Promise.resolve('This is the AI reply.'))
+    mockStreamChatCompletion.mockImplementation(okStream('This is the AI reply.'))
 
     const { result } = renderHook(() => useChat())
     await waitFor(() => expect(result.current.loaded).toBe(true))
@@ -130,7 +141,7 @@ describe('useChat 消息追加', () => {
   })
 
   it('sendMessage 完成后追加 assistant 消息', async () => {
-    mockChatCompletion.mockImplementation(() => Promise.resolve('AI 回复内容。'))
+    mockStreamChatCompletion.mockImplementation(okStream('AI 回复内容。'))
 
     const { result } = renderHook(() => useChat())
     await waitFor(() => expect(result.current.loaded).toBe(true))
@@ -153,9 +164,33 @@ describe('useChat 消息追加', () => {
     expect(lastAssistant.content).toBe('AI 回复内容。')
   })
 
+  it('流式 onDelta 逐块累积写入 assistant 消息', async () => {
+    mockStreamChatCompletion.mockImplementation(okStream('abcdefghij', 3))
+
+    const { result } = renderHook(() => useChat())
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+
+    await act(async () => {
+      await result.current.sendMessage('Hello')
+    })
+
+    const allAssistant = result.current.messages.filter(
+      (m: client.SessionMessage) => m.role === 'assistant',
+    )
+    const lastAssistant = allAssistant[allAssistant.length - 1]
+    // 3+3+3+1 四块累积后应等于完整文本（无重复、无丢失）
+    expect(lastAssistant.content).toBe('abcdefghij')
+  })
+
   it('sendMessage 结束后 isStreaming 恢复 false', async () => {
-    mockChatCompletion.mockImplementation(
-      () => new Promise<string>((r) => setTimeout(() => r('延迟回复'), 50)),
+    mockStreamChatCompletion.mockImplementation(
+      (_params: unknown, onDelta: (c: string) => void) =>
+        new Promise<string>((r) => {
+          setTimeout(() => {
+            onDelta('延迟回复')
+            r('延迟回复')
+          }, 50)
+        }),
     )
 
     const { result } = renderHook(() => useChat())
@@ -167,6 +202,93 @@ describe('useChat 消息追加', () => {
 
     // 结束后流式状态应恢复
     expect(result.current.isStreaming).toBe(false)
+  })
+})
+
+describe('useChat T-022 断连重连', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockListSessions.mockResolvedValue({ sessions: [fakeSession], total: 1 })
+    mockListMessages.mockResolvedValue({ messages: fakeMessages, has_more: false })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('部分输出后断连 → streamDisconnected 置位，重连成功后归位', async () => {
+    // 首次：先吐 2 块内容再 reject（模拟中途断流）
+    mockStreamChatCompletion.mockImplementationOnce(
+      (_params: unknown, onDelta: (c: string) => void) => {
+        onDelta('部分内容')
+        return Promise.reject(new Error('连接中断：流式响应超时（60 秒未收到数据）'))
+      },
+    )
+
+    const { result } = renderHook(() => useChat())
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+
+    await act(async () => {
+      await result.current.sendMessage('Hello')
+    })
+
+    // 断连横幅应出现（部分输出后失败，而非普通 error）
+    expect(result.current.streamDisconnected).toBe(true)
+
+    // 重连：成功完成流 → 归位
+    mockStreamChatCompletion.mockImplementation(okStream('完整回复'))
+    vi.useFakeTimers()
+    await act(async () => {
+      const p = result.current.retryStream()
+      await vi.advanceTimersByTimeAsync(1000) // 跳过 1s 退避
+      await p
+    })
+
+    expect(result.current.streamDisconnected).toBe(false)
+    const allAssistant = result.current.messages.filter(
+      (m: client.SessionMessage) => m.role === 'assistant',
+    )
+    expect(allAssistant[allAssistant.length - 1].content).toBe('完整回复')
+  })
+
+  it('retryStream 在 3 次重试耗尽后停止并提示手动刷新', async () => {
+    // 每次都部分输出后断连
+    mockStreamChatCompletion.mockImplementation(
+      (_params: unknown, onDelta: (c: string) => void) => {
+        onDelta('部分')
+        return Promise.reject(new Error('连接中断：流式响应超时（60 秒未收到数据）'))
+      },
+    )
+
+    const { result } = renderHook(() => useChat())
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+
+    await act(async () => {
+      await result.current.sendMessage('Hello')
+    })
+    expect(result.current.streamDisconnected).toBe(true)
+
+    // 3 次真实重连：1s、2s、4s 退避（fake timers 快进）；每次仍以
+    // 部分输出后断连告终 → 横幅在每次失败后重新置位
+    vi.useFakeTimers()
+    for (const delay of [1000, 2000, 4000]) {
+      await act(async () => {
+        const p = result.current.retryStream()
+        await vi.advanceTimersByTimeAsync(delay)
+        await p
+      })
+      expect(result.current.streamDisconnected).toBe(true)
+    }
+
+    // 第 4 次调用：计数器已达 3 上限 → 不再发起请求，横幅清除，
+    // 转为普通 error 提示手动刷新
+    mockStreamChatCompletion.mockClear()
+    await act(async () => {
+      await result.current.retryStream()
+    })
+    expect(mockStreamChatCompletion).not.toHaveBeenCalled()
+    expect(result.current.streamDisconnected).toBe(false)
+    expect(result.current.error).toContain('手动刷新')
   })
 })
 
@@ -189,7 +311,6 @@ describe('useChat 会话管理', () => {
     mockCreateSession.mockResolvedValue(newSession)
 
     const { result } = renderHook(() => useChat())
-
     await waitFor(() => expect(result.current.loaded).toBe(true))
 
     // 初始 1 个会话

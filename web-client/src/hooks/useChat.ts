@@ -3,7 +3,7 @@ import {
   createSession,
   listMessages,
   listSessions,
-  chatCompletion,
+  streamChatCompletion,
   type ChatMessage,
   type Session,
   type SessionMessage,
@@ -174,13 +174,27 @@ export function useChat(initialSessionId?: string) {
         content: m.content,
       }))
 
+      // Stream deltas incrementally: the SSE path (streamChatCompletion)
+      // gives the typewriter effect and its 60s connect / 30s idle guards.
+      // streamedText tracks what actually arrived so the catch block can
+      // tell a mid-reply disconnect (show reconnect banner) from a
+      // pre-first-byte failure (plain error) — assistantMsg.content is a
+      // stale closure snapshot and can never be used for that.
+      let streamedText = ''
       try {
-        const text = await chatCompletion({
-          messages: payload,
-          sessionId: currentSession.id,
-          skillIds: selectedSkillIds,
-          signal: controller.signal,
-        })
+        const text = await streamChatCompletion(
+          {
+            messages: payload,
+            sessionId: currentSession.id,
+            skillIds: selectedSkillIds,
+            signal: controller.signal,
+          },
+          (delta) => {
+            streamedText += delta
+            patchAssistant((m) => ({ ...m, content: m.content + delta }))
+          },
+        )
+        streamedText = text
         patchAssistant((m) => ({ ...m, content: text }))
         // Successful stream: reset the reconnect-attempt counter so later
         // unrelated disconnects get a fresh backoff budget.
@@ -195,7 +209,7 @@ export function useChat(initialSessionId?: string) {
           // T-022: distinguish stream-disconnect from other errors.
           // If partial content arrived before the error, the stream was
           // interrupted mid-reply → show a friendly reconnect prompt.
-          const hadContent = assistantMsg.content !== ''
+          const hadContent = streamedText !== ''
           if (hadContent) {
             setStreamDisconnected(true)
           }
