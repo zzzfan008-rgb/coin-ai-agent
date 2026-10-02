@@ -439,7 +439,8 @@ async fn stream_chat(state: Arc<AppServices>, req: CoreChatRequest) -> Response 
             Err(e) => {
                 let payload =
                     serde_json::json!({"error": {"code": "LLM_ERROR", "message": e.to_string()}});
-                let _ = tx.send(Bytes::from(format!("data: {payload}\n\n")));
+                // Raw payload; data_stream below wraps it as one SSE data event.
+                let _ = tx.send(Bytes::from(payload.to_string()));
                 let _ = ka_done_tx.send(());
                 return;
             }
@@ -475,8 +476,9 @@ async fn stream_chat(state: Arc<AppServices>, req: CoreChatRequest) -> Response 
                 "finish_reason": "stop"
             }],
         });
-        let _ = tx.send(Bytes::from(format!("data: {chunk}\n\n")));
-        let _ = tx.send(Bytes::from_static(b"data: [DONE]\n\n"));
+        // Raw content only; data_stream below adds the single "data: " prefix.
+        let _ = tx.send(Bytes::from(chunk.to_string()));
+        let _ = tx.send(Bytes::from_static(b"[DONE]"));
         // Signal keepalive loop to exit so the SSE connection closes.
         let _ = ka_done_tx.send(());
     });
