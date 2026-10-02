@@ -152,12 +152,14 @@ impl AgentEngine {
         collections: Option<&[String]>,
         user_ctx: &UserContext,
     ) {
-        let (Some(rag), Some(colls)) = (&self.rag, collections) else {
+        let Some(rag) = &self.rag else {
             return;
         };
-        if colls.is_empty() {
-            return;
-        }
+        // RAG retrieval is gated only on the retriever being configured.
+        // Qdrant search already filters by org/dept (tenant isolation), so
+        // an empty/absent knowledge_collections list no longer disables
+        // retrieval — it previously made RAG silently never trigger.
+        let _ = collections;
         let Some(idx) = conversation.iter().rposition(|m| m.role == "user") else {
             return;
         };

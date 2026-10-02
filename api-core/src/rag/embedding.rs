@@ -21,6 +21,8 @@ pub struct EmbeddingService {
     api_key: String,
     endpoint: String,
     model: String,
+    /// Vector dimensionality requested from the provider (0 = provider default).
+    dimensions: usize,
 }
 
 impl EmbeddingService {
@@ -29,6 +31,7 @@ impl EmbeddingService {
         api_key: impl Into<String>,
         base_url: impl Into<String>,
         model: impl Into<String>,
+        dimensions: usize,
     ) -> Self {
         let base = base_url.into().trim_end_matches('/').to_string();
         Self {
@@ -39,6 +42,7 @@ impl EmbeddingService {
             api_key: api_key.into(),
             endpoint: format!("{base}/embeddings"),
             model: model.into(),
+            dimensions,
         }
     }
 
@@ -48,10 +52,13 @@ impl EmbeddingService {
             bail!("Embedding API key is not configured");
         }
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.model,
             "input": text,
         });
+        if self.dimensions > 0 {
+            body["dimensions"] = serde_json::json!(self.dimensions);
+        }
 
         let resp = self
             .http

@@ -335,6 +335,10 @@ pub async fn chat_stream(
 /// streaming).
 async fn stream_chat(state: Arc<AppServices>, req: CoreChatRequest) -> Response {
     let (tx, rx) = tokio::sync::broadcast::channel::<Bytes>(128);
+    // Signalled when the reply task finishes (success or error) so the
+    // keepalive loop below can terminate and hyper closes the SSE connection;
+    // without it the connection stays open until client timeout.
+    let (ka_done_tx, mut ka_done_rx) = tokio::sync::oneshot::channel::<()>();
 
     let CoreChatRequest {
         model: req_model,
@@ -436,6 +440,7 @@ async fn stream_chat(state: Arc<AppServices>, req: CoreChatRequest) -> Response 
                 let payload =
                     serde_json::json!({"error": {"code": "LLM_ERROR", "message": e.to_string()}});
                 let _ = tx.send(Bytes::from(format!("data: {payload}\n\n")));
+                let _ = ka_done_tx.send(());
                 return;
             }
         };
@@ -472,6 +477,8 @@ async fn stream_chat(state: Arc<AppServices>, req: CoreChatRequest) -> Response 
         });
         let _ = tx.send(Bytes::from(format!("data: {chunk}\n\n")));
         let _ = tx.send(Bytes::from_static(b"data: [DONE]\n\n"));
+        // Signal keepalive loop to exit so the SSE connection closes.
+        let _ = ka_done_tx.send(());
     });
 
     use futures::StreamExt as Fs;
@@ -495,7 +502,12 @@ async fn stream_chat(state: Arc<AppServices>, req: CoreChatRequest) -> Response 
     let ka_stream = Box::pin(async_stream::stream! {
         let mut ticker = pin!(interval(Duration::from_secs(keepalive_interval_secs)));
         loop {
-            ticker.as_mut().tick().await;
+            tokio::select! {
+                _ = ticker.tick() => {}
+                // Reply task finished: stop keepalives so the merged stream
+                // completes and the SSE connection actually closes.
+                _ = &mut ka_done_rx => break,
+            }
             let _ = ka_tx.send(());
             // SSE comment: ": keepalive\n\n" — no data/event/id fields.
             yield Ok::<_, std::convert::Infallible>(Bytes::from_static(b": keepalive\n\n"));

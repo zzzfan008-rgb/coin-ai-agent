@@ -183,6 +183,7 @@ impl RagRetriever {
             config.embedding_api_key.clone(),
             config.embedding_base_url.clone(),
             config.embedding_model.clone(),
+            config.embedding_dim,
         );
         let store = QdrantStore::new(&config.qdrant_url, &config.qdrant_collection);
 

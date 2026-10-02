@@ -75,6 +75,14 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	isStream := req.Stream != nil && *req.Stream
+	// Rust core defaults `stream` to true when the field is absent
+	// (`#[serde(default = "default_true")]`), while we treat a nil pointer as
+	// false. Normalise so the forwarded body always matches our branch choice —
+	// otherwise a stream-less request reaches core as stream=true, and core's
+	// keepalive SSE loop never closes, hanging our io.Copy forever.
+	if req.Stream == nil {
+		req.Stream = new(bool)
+	}
 	log.Printf("[chat completions] model=%s stream=%v", req.Model, isStream)
 
 	claims := middleware.GetClaims(r.Context())
@@ -103,16 +111,36 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 
 	var resp *http.Response
 	var err error
+	viaDirect := false
 
-	// ── Direct LLM call: skip Rust core, call BerryPi token-plan gateway ──
+	// ── Model rewrite: token-plan relay alias → deepseek-v4-flash ──
+	switch req.Model {
+	case "deepseek-v4-pro", "deepseek-v4-flash", "qwen3.8-max", "qwen-plus", "fashion-ai-default", "gpt-4o", "qwen3.8", "qwen3.8-flash":
+		req.Model = "deepseek-v4-flash"
+	}
+
+	// ── Primary path: Rust core (skill engine + intent router + RAG retrieval) ──
+	coreOK := false
+	resp, err = h.chatSvc.ProxyRequestWithContext(ctx, req, userID, orgID, deptID, role, middleware.GetClientIP(r))
+	if err != nil {
+		log.Printf("[chat completions] ProxyRequestWithContext error: %v", err)
+	} else {
+		defer resp.Body.Close()
+		log.Printf("[chat completions] core status=%d", resp.StatusCode)
+		if resp.StatusCode == http.StatusOK {
+			coreOK = true
+		} else {
+			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			log.Printf("[chat completions] core non-200: status=%d body=%s", resp.StatusCode, string(bodyBytes))
+			resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		}
+	}
+
 	berrypiKey := os.Getenv("BERRYPI_API_KEY")
 	berrypiURL := os.Getenv("BERRYPI_BASE_URL")
-	if berrypiKey != "" && berrypiURL != "" {
-		// rewrite model name
-		switch req.Model {
-		case "deepseek-v4-pro", "deepseek-v4-flash", "qwen3.8-max", "qwen-plus", "fashion-ai-default", "gpt-4o", "qwen3.8", "qwen3.8-flash":
-			req.Model = "deepseek-v4-flash"
-		}
+	if !coreOK && berrypiKey != "" && berrypiURL != "" {
+		// ── Fallback: direct BerryPi call (no skills/RAG — used only when core is down) ──
+		viaDirect = true
 		bodyBytes, _ := json.Marshal(req)
 		coreReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, berrypiURL+"/v1/chat/completions", bytes.NewReader(bodyBytes))
 		coreReq.Header.Set("Content-Type", "application/json")
@@ -124,27 +152,15 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer resp.Body.Close()
-		log.Printf("[chat completions] BerryPi status=%d", resp.StatusCode)
+		log.Printf("[chat completions] BerryPi status=%d (core fallback)", resp.StatusCode)
 		if resp.StatusCode != http.StatusOK {
 			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 			log.Printf("[chat completions] BerryPi non-200: status=%d body=%s", resp.StatusCode, string(bodyBytes))
 			resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 		}
-	} else {
-		// fallback to Rust core
-		resp, err = h.chatSvc.ProxyRequestWithContext(ctx, req, userID, orgID, deptID, role, middleware.GetClientIP(r))
-		if err != nil {
-			log.Printf("[chat completions] ProxyRequestWithContext error: %v", err)
-			writeError(w, http.StatusBadGateway, "UPSTREAM_ERROR", "failed to reach core service")
-			return
-		}
-		defer resp.Body.Close()
-		log.Printf("[chat completions] core status=%d", resp.StatusCode)
-		if resp.StatusCode != http.StatusOK {
-			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-			log.Printf("[chat completions] core non-200: status=%d body=%s", resp.StatusCode, string(bodyBytes))
-			resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-		}
+	} else if !coreOK {
+		writeError(w, http.StatusBadGateway, "UPSTREAM_ERROR", "core service unavailable")
+		return
 	}
 
 	if isStream {
@@ -190,7 +206,9 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Parse accumulated SSE → extract assistant content
-		if hasSession && h.sessSvc != nil {
+		// On core path the Rust core persists the assistant reply itself
+		// (session_id in extra_body); only save here for the direct fallback.
+		if viaDirect && hasSession && h.sessSvc != nil {
 			fullText := parseSSEAssistantContent(assistantBuf.String())
 			if fullText != "" {
 				if err := h.sessSvc.SaveMessage(ctx, sessionID, "assistant", fullText, req.Model); err != nil {
@@ -215,7 +233,8 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(buf.Bytes())
 
-		if hasSession && h.sessSvc != nil {
+		// Assistant reply: core path persists server-side; save here only for direct fallback
+		if viaDirect && hasSession && h.sessSvc != nil {
 			var chatResp model.ChatCompletionResponse
 			if json.Unmarshal(buf.Bytes(), &chatResp) == nil && len(chatResp.Choices) > 0 {
 				assistantText := chatResp.Choices[0].Message.Content
