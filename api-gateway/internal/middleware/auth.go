@@ -8,11 +8,11 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/google/uuid"
-	"github.com/gorilla/mux"
 	"fashionai/api-gateway/internal/service"
 	"fashionai/api-gateway/pkg/auth"
 	"fashionai/api-gateway/pkg/rbac"
+	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 )
 
 // ─── Shared types and context key ─────────────────────────────────────────────

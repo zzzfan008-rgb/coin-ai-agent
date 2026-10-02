@@ -5,16 +5,15 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/google/uuid"
-	"github.com/gorilla/mux"
 	"fashionai/api-gateway/internal/middleware"
 	"fashionai/api-gateway/internal/model"
 	"fashionai/api-gateway/internal/service"
+	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 
-	"github.com/jmoiron/sqlx"
 	"context"
+	"github.com/jmoiron/sqlx"
 	"time"
-
 )
 
 type AuthHandler struct {

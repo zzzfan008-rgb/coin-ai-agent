@@ -121,7 +121,10 @@ impl AgentEngine {
                     let content = assistant.content.unwrap_or_default();
                     match parse_xml_tool_calls(&content) {
                         Some((calls, stripped)) => {
-                            tracing::info!(n = calls.len(), "Parsed XML function_calls from content");
+                            tracing::info!(
+                                n = calls.len(),
+                                "Parsed XML function_calls from content"
+                            );
                             (calls, Some(stripped))
                         }
                         None => return Ok((content, total_usage)),
@@ -266,7 +269,11 @@ fn parse_xml_tool_calls(content: &str) -> Option<(Vec<ToolCall>, String)> {
             let raw = prest[vstart..vstart + vend_rel].trim().to_string();
             let val = match raw.parse::<i64>() {
                 Ok(n) => serde_json::Value::Number(n.into()),
-                Err(_) => match raw.parse::<f64>().ok().and_then(serde_json::Number::from_f64) {
+                Err(_) => match raw
+                    .parse::<f64>()
+                    .ok()
+                    .and_then(serde_json::Number::from_f64)
+                {
                     Some(num) => serde_json::Value::Number(num),
                     None => serde_json::Value::String(raw),
                 },
@@ -289,7 +296,9 @@ fn parse_xml_tool_calls(content: &str) -> Option<(Vec<ToolCall>, String)> {
     if calls.is_empty() {
         return None;
     }
-    let stripped = (content[..start].to_string() + &content[end..]).trim().to_string();
+    let stripped = (content[..start].to_string() + &content[end..])
+        .trim()
+        .to_string();
     Some((calls, stripped))
 }
 

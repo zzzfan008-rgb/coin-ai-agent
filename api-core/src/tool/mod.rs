@@ -49,7 +49,11 @@ async fn execute_mcp_tool(mcp_tool: &str, args: &Value) -> AppResult<String> {
         }
     };
 
-    tracing::info!(server_id, tool_name, "Executing MCP tool via global manager");
+    tracing::info!(
+        server_id,
+        tool_name,
+        "Executing MCP tool via global manager"
+    );
 
     crate::mcp::MCP_MANAGER
         .invoke(server_id, tool_name, args.clone())

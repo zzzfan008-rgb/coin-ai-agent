@@ -48,32 +48,32 @@ type User struct {
 
 // Skill represents a registered skill/tool.
 type Skill struct {
-	ID               uuid.UUID       `db:"id" json:"id"`
-	OrgID            uuid.UUID       `db:"org_id" json:"org_id"`
-	Name             string          `db:"name" json:"name"`
-	Version          string          `db:"version" json:"version"`
-	Description      *string         `db:"description" json:"description"`
-	PromptTemplate   *string         `db:"prompt_template" json:"prompt_template"`
-	ToolDefinitions  json.RawMessage `db:"tool_definitions" json:"tool_definitions"`
+	ID              uuid.UUID       `db:"id" json:"id"`
+	OrgID           uuid.UUID       `db:"org_id" json:"org_id"`
+	Name            string          `db:"name" json:"name"`
+	Version         string          `db:"version" json:"version"`
+	Description     *string         `db:"description" json:"description"`
+	PromptTemplate  *string         `db:"prompt_template" json:"prompt_template"`
+	ToolDefinitions json.RawMessage `db:"tool_definitions" json:"tool_definitions"`
 	IsActive        bool            `db:"is_active" json:"is_active"`
-	CreatedBy        *uuid.UUID      `db:"created_by" json:"created_by"`
-	CreatedAt        time.Time       `db:"created_at" json:"created_at"`
-	UpdatedAt        time.Time       `db:"updated_at" json:"updated_at"`
+	CreatedBy       *uuid.UUID      `db:"created_by" json:"created_by"`
+	CreatedAt       time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt       time.Time       `db:"updated_at" json:"updated_at"`
 }
 
 // MCPServer represents an MCP server configuration.
 type MCPServer struct {
-	ID          uuid.UUID       `db:"id" json:"id"`
-	OrgID       uuid.UUID       `db:"org_id" json:"org_id"`
-	Name        string          `db:"name" json:"name"`
-	ServerType  string          `db:"server_type" json:"server_type"`
-	Endpoint    *string         `db:"endpoint" json:"endpoint"`
-	AuthToken   *string         `db:"auth_token" json:"-"`
-	EnvVars     json.RawMessage `db:"env_vars" json:"env_vars"`
-	IsActive    bool            `db:"is_active" json:"is_active"`
-	CreatedBy   *uuid.UUID      `db:"created_by" json:"created_by"`
-	CreatedAt   time.Time       `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time       `db:"updated_at" json:"updated_at"`
+	ID         uuid.UUID       `db:"id" json:"id"`
+	OrgID      uuid.UUID       `db:"org_id" json:"org_id"`
+	Name       string          `db:"name" json:"name"`
+	ServerType string          `db:"server_type" json:"server_type"`
+	Endpoint   *string         `db:"endpoint" json:"endpoint"`
+	AuthToken  *string         `db:"auth_token" json:"-"`
+	EnvVars    json.RawMessage `db:"env_vars" json:"env_vars"`
+	IsActive   bool            `db:"is_active" json:"is_active"`
+	CreatedBy  *uuid.UUID      `db:"created_by" json:"created_by"`
+	CreatedAt  time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt  time.Time       `db:"updated_at" json:"updated_at"`
 }
 
 // Role represents a custom role definition.
@@ -122,16 +122,16 @@ type Message struct {
 
 // Project represents a fashion collection project.
 type Project struct {
-	ID          uuid.UUID  `db:"id" json:"id"`
-	OrgID       uuid.UUID  `db:"org_id" json:"org_id"`
-	DeptID      uuid.UUID  `db:"dept_id" json:"dept_id"`
-	OwnerID     uuid.UUID  `db:"owner_id" json:"owner_id"`
-	Name        string     `db:"name" json:"name"`
-	Description  *string    `db:"description" json:"description"`
-	CoverColor  string     `db:"cover_color" json:"cover_color"`
-	IsArchived  bool       `db:"is_archived" json:"is_archived"`
-	CreatedAt   time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at"`
+	ID          uuid.UUID `db:"id" json:"id"`
+	OrgID       uuid.UUID `db:"org_id" json:"org_id"`
+	DeptID      uuid.UUID `db:"dept_id" json:"dept_id"`
+	OwnerID     uuid.UUID `db:"owner_id" json:"owner_id"`
+	Name        string    `db:"name" json:"name"`
+	Description *string   `db:"description" json:"description"`
+	CoverColor  string    `db:"cover_color" json:"cover_color"`
+	IsArchived  bool      `db:"is_archived" json:"is_archived"`
+	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // SessionProject represents a session-project membership.
@@ -143,19 +143,19 @@ type SessionProject struct {
 
 // KnowledgeCollection represents a vector knowledge base.
 type KnowledgeCollection struct {
-	ID                uuid.UUID  `db:"id" json:"id"`
-	OrgID             uuid.UUID  `db:"org_id" json:"org_id"`
-	DeptID            *uuid.UUID `db:"dept_id" json:"dept_id"`
-	Name              string     `db:"name" json:"name"`
-	Description       *string    `db:"description" json:"description"`
-	CollectionType    string     `db:"collection_type" json:"collection_type"`
-	EmbeddingModel    *string    `db:"embedding_model" json:"embedding_model"`
-	VectorDim         *int       `db:"vector_dim" json:"vector_dim"`
-	QdrantCollection  *string    `db:"qdrant_collection" json:"qdrant_collection"`
-	IsPublic          bool       `db:"is_public" json:"is_public"`
-	CreatedBy         *uuid.UUID `db:"created_by" json:"created_by"`
-	CreatedAt         time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt         time.Time  `db:"updated_at" json:"updated_at"`
+	ID               uuid.UUID  `db:"id" json:"id"`
+	OrgID            uuid.UUID  `db:"org_id" json:"org_id"`
+	DeptID           *uuid.UUID `db:"dept_id" json:"dept_id"`
+	Name             string     `db:"name" json:"name"`
+	Description      *string    `db:"description" json:"description"`
+	CollectionType   string     `db:"collection_type" json:"collection_type"`
+	EmbeddingModel   *string    `db:"embedding_model" json:"embedding_model"`
+	VectorDim        *int       `db:"vector_dim" json:"vector_dim"`
+	QdrantCollection *string    `db:"qdrant_collection" json:"qdrant_collection"`
+	IsPublic         bool       `db:"is_public" json:"is_public"`
+	CreatedBy        *uuid.UUID `db:"created_by" json:"created_by"`
+	CreatedAt        time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt        time.Time  `db:"updated_at" json:"updated_at"`
 }
 
 // AuditLog represents an audit trail entry.

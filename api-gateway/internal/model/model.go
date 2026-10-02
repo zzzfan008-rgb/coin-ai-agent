@@ -7,13 +7,13 @@ import "time"
 // ─── Auth ───────────────────────────────────────────────────────────────────
 
 type RegisterRequest struct {
-	OrgName   string `json:"org_name" validate:"required"`
-	DeptName  string `json:"dept_name" validate:"required"`
-	Username  string `json:"username" validate:"required,min=3,max=50"`
-	Password  string `json:"password" validate:"required,min=8"`
-	Email     string `json:"email" validate:"omitempty,email"`
+	OrgName     string `json:"org_name" validate:"required"`
+	DeptName    string `json:"dept_name" validate:"required"`
+	Username    string `json:"username" validate:"required,min=3,max=50"`
+	Password    string `json:"password" validate:"required,min=8"`
+	Email       string `json:"email" validate:"omitempty,email"`
 	DisplayName string `json:"display_name"`
-	Role      string `json:"role"`
+	Role        string `json:"role"`
 }
 
 type LoginRequest struct {
@@ -36,23 +36,23 @@ type AuthResponse struct {
 // ChatCompletionRequest mirrors the OpenAI chat completions request body.
 // Extra fields (skill_ids, mcp_server_ids, etc.) live in ExtraBody.
 type ChatCompletionRequest struct {
-	Model       string                  `json:"model"`
-	Messages    []ChatMessage           `json:"messages"`
-	Stream      *bool                   `json:"stream,omitempty"`
-	ExtraBody   map[string]interface{}  `json:"extra_body,omitempty"`
-	MaxTokens   *int                    `json:"max_tokens,omitempty"`
-	Temperature *float64                `json:"temperature,omitempty"`
-	TopP        *float64                `json:"top_p,omitempty"`
+	Model       string                 `json:"model"`
+	Messages    []ChatMessage          `json:"messages"`
+	Stream      *bool                  `json:"stream,omitempty"`
+	ExtraBody   map[string]interface{} `json:"extra_body,omitempty"`
+	MaxTokens   *int                   `json:"max_tokens,omitempty"`
+	Temperature *float64               `json:"temperature,omitempty"`
+	TopP        *float64               `json:"top_p,omitempty"`
 	// UserContext is injected by the gateway from JWT claims before forwarding to core.
-	UserContext *UserContext            `json:"user_context,omitempty"`
+	UserContext *UserContext `json:"user_context,omitempty"`
 }
 
 // UserContext carries identity info from the JWT for core service authorization.
 type UserContext struct {
-	UserID   string `json:"user_id"`
-	OrgID    string `json:"org_id"`
-	DeptID   string `json:"dept_id"`
-	Role     string `json:"role"`
+	UserID    string `json:"user_id"`
+	OrgID     string `json:"org_id"`
+	DeptID    string `json:"dept_id"`
+	Role      string `json:"role"`
 	IPAddress string `json:"ip_address,omitempty"`
 }
 
@@ -65,15 +65,15 @@ type ChatMessage struct {
 type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens     int `json:"total_tokens"`
+	TotalTokens      int `json:"total_tokens"`
 }
 
 type ModelEntry struct {
-	ID       string `json:"id"`
-	Object   string `json:"object"`
-	Created  int64  `json:"created"`
-	OwnedBy  string `json:"owned_by"`
-	Root     string `json:"root,omitempty"`
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	Created int64  `json:"created"`
+	OwnedBy string `json:"owned_by"`
+	Root    string `json:"root,omitempty"`
 }
 
 type ModelList struct {
@@ -82,33 +82,33 @@ type ModelList struct {
 }
 
 type ChatResponse struct {
-	ID      string        `json:"id"`
-	Object  string        `json:"object"`
-	Created int64         `json:"created"`
-	Model   string        `json:"model"`
+	ID      string                 `json:"id"`
+	Object  string                 `json:"object"`
+	Created int64                  `json:"created"`
+	Model   string                 `json:"model"`
 	Choices []ChatCompletionChoice `json:"choices"`
-	Usage   *Usage        `json:"usage,omitempty"`
+	Usage   *Usage                 `json:"usage,omitempty"`
 }
 
 type ChatCompletionChoice struct {
-	Index        int          `json:"index"`
-	Message      ChatMessage  `json:"message"`
-	FinishReason string       `json:"finish_reason,omitempty"`
+	Index        int         `json:"index"`
+	Message      ChatMessage `json:"message"`
+	FinishReason string      `json:"finish_reason,omitempty"`
 }
 
 type ChatCompletionResponse struct {
-	ID      string                  `json:"id"`
-	Object  string                  `json:"object"`
-	Created int64                   `json:"created"`
-	Model   string                  `json:"model"`
-	Choices []ChatCompletionChoice  `json:"choices"`
+	ID      string                 `json:"id"`
+	Object  string                 `json:"object"`
+	Created int64                  `json:"created"`
+	Model   string                 `json:"model"`
+	Choices []ChatCompletionChoice `json:"choices"`
 	Usage   *Usage                 `json:"usage,omitempty"`
 }
 
 type ChatStreamChoice struct {
-	Index        int          `json:"index"`
-	Delta        ChatMessage  `json:"delta"`
-	FinishReason string       `json:"finish_reason,omitempty"`
+	Index        int         `json:"index"`
+	Delta        ChatMessage `json:"delta"`
+	FinishReason string      `json:"finish_reason,omitempty"`
 }
 
 type ChatStreamResponse struct {
@@ -117,7 +117,7 @@ type ChatStreamResponse struct {
 	Created int64              `json:"created"`
 	Model   string             `json:"model"`
 	Choices []ChatStreamChoice `json:"choices"`
-	Usage   *Usage            `json:"usage,omitempty"`
+	Usage   *Usage             `json:"usage,omitempty"`
 }
 
 // ExtraBody holds gateway-specific fields from the chat request's `extra_body`.
@@ -131,16 +131,16 @@ type ExtraBody struct {
 // HealthResponse is the response body for GET /health.
 type HealthResponse struct {
 	Status   string                   `json:"status"`
-	Version  string                  `json:"version,omitempty"`
+	Version  string                   `json:"version,omitempty"`
 	Services map[string]ServiceStatus `json:"services,omitempty"`
 }
 
 // ServiceStatus describes the health of a single dependency.
 type ServiceStatus struct {
-	Status string `json:"status"`
-	OK     bool   `json:"ok"`
+	Status  string `json:"status"`
+	OK      bool   `json:"ok"`
 	Latency string `json:"latency,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // APIError is a structured error response.
@@ -157,16 +157,16 @@ type ErrorResponse struct {
 // ─── Sessions ────────────────────────────────────────────────────────────────
 
 type CreateSessionRequest struct {
-	Title     string   `json:"title"`
-	Model     string   `json:"model"`
-	SkillIDs  []string `json:"skill_ids"`
+	Title        string   `json:"title"`
+	Model        string   `json:"model"`
+	SkillIDs     []string `json:"skill_ids"`
 	MCPServerIDs []string `json:"mcp_server_ids"`
-	KBIDs     []string `json:"kb_ids"`
+	KBIDs        []string `json:"kb_ids"`
 }
 
 type UpdateSessionRequest struct {
-	Title       *string `json:"title"`
-	IsArchived  *bool   `json:"is_archived"`
+	Title      *string `json:"title"`
+	IsArchived *bool   `json:"is_archived"`
 }
 
 type SessionWithCount struct {
@@ -207,9 +207,9 @@ type MessageDTO struct {
 // ─── Projects ─────────────────────────────────────────────────────────────────
 
 type CreateProjectRequest struct {
-	Name       string  `json:"name" validate:"required"`
+	Name        string  `json:"name" validate:"required"`
 	Description *string `json:"description"`
-	CoverColor string  `json:"cover_color"`
+	CoverColor  string  `json:"cover_color"`
 }
 
 type UpdateProjectRequest struct {
@@ -227,10 +227,10 @@ type ProjectDTO struct {
 	OrgID       string    `json:"org_id"`
 	DeptID      string    `json:"dept_id"`
 	OwnerID     string    `json:"owner_id"`
-	Name        string   `json:"name"`
+	Name        string    `json:"name"`
 	Description *string   `json:"description"`
-	CoverColor  string   `json:"cover_color"`
-	IsArchived  bool     `json:"is_archived"`
+	CoverColor  string    `json:"cover_color"`
+	IsArchived  bool      `json:"is_archived"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -242,7 +242,7 @@ type ProjectDetailDTO struct {
 
 type ProjectList struct {
 	Projects []ProjectDTO `json:"projects"`
-	Total    int           `json:"total"`
+	Total    int          `json:"total"`
 }
 
 // ─── MCP servers (T-016) ─────────────────────────────────────────────────────
@@ -278,15 +278,15 @@ type McpUserToggleRequest struct {
 // ─── Users ───────────────────────────────────────────────────────────────────
 
 type UserProfileResponse struct {
-	ID          string     `json:"id"`
-	OrgID       string     `json:"org_id"`
-	DeptID      string     `json:"dept_id"`
-	Username    string     `json:"username"`
-	DisplayName *string    `json:"display_name"`
-	Email       *string    `json:"email"`
-	Role        string     `json:"role"`
-	IsActive    bool       `json:"is_active"`
-	CreatedAt   time.Time  `json:"created_at"`
+	ID          string    `json:"id"`
+	OrgID       string    `json:"org_id"`
+	DeptID      string    `json:"dept_id"`
+	Username    string    `json:"username"`
+	DisplayName *string   `json:"display_name"`
+	Email       *string   `json:"email"`
+	Role        string    `json:"role"`
+	IsActive    bool      `json:"is_active"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type UpdateProfileRequest struct {
@@ -301,7 +301,7 @@ type ChangePasswordRequest struct {
 
 type UserList struct {
 	Users []UserProfileResponse `json:"users"`
-	Total int                  `json:"total"`
+	Total int                   `json:"total"`
 }
 
 // ─── Depts ───────────────────────────────────────────────────────────────────
@@ -320,11 +320,11 @@ type DeptList struct {
 }
 
 type DeptDTO struct {
-	ID        string  `json:"id"`
-	OrgID     string  `json:"org_id"`
-	ParentID  *string `json:"parent_id"`
-	Name      string  `json:"name"`
-	Path      string  `json:"path"`
+	ID        string    `json:"id"`
+	OrgID     string    `json:"org_id"`
+	ParentID  *string   `json:"parent_id"`
+	Name      string    `json:"name"`
+	Path      string    `json:"path"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -341,10 +341,10 @@ type RoleList struct {
 }
 
 type RoleDTO struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Permissions []string `json:"permissions"`
-	Description *string  `json:"description"`
-	IsSystem    bool     `json:"is_system"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Permissions []string  `json:"permissions"`
+	Description *string   `json:"description"`
+	IsSystem    bool      `json:"is_system"`
 	CreatedAt   time.Time `json:"created_at"`
 }

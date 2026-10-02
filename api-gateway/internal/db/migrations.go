@@ -18,12 +18,12 @@ import (
 
 // Config holds database connection settings.
 type Config struct {
-	DatabaseURL    string
-	MaxOpenConns   int
-	MaxIdleConns   int
+	DatabaseURL     string
+	MaxOpenConns    int
+	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
 	// MigrationsFS is an optional embedded filesystem containing SQL migration files.
-	MigrationsFS *struct{} // placeholder; migrations are run via Migrate()
+	MigrationsFS   *struct{} // placeholder; migrations are run via Migrate()
 	MigrationsRoot string
 	SkipMigrations bool
 }
