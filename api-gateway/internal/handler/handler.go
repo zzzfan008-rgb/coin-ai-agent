@@ -567,9 +567,9 @@ func (h *HealthHandler) Health(w http.ResponseWriter, r *http.Request) {
 		Status:  overall,
 		Version: "1.0.0",
 		Services: map[string]model.ServiceStatus{
-			"database":  {Status: dbStatus},
-			"redis":     {Status: "ok"},
-			"rust_core": {Status: "ok"},
+			"database":  {Status: dbStatus, OK: dbStatus == "ok"},
+			"redis":     {Status: "ok", OK: true},
+			"rust_core": {Status: "ok", OK: true},
 		},
 	})
 }
