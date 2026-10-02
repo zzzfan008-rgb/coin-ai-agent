@@ -117,7 +117,62 @@ impl RbacService {
         }
     }
 
+    /// Load enterprise MCP grants from the `mcp_permissions` table into the
+    /// enforcer (P1-2: policies must be data-driven, not a static CSV).
+    ///
+    /// One row → one policy rule `(sub=user_id|*, role=*, dept=dept_id|*,
+    /// obj=mcp:{server_name}/*, act=invoke)`; the keyMatch-based obj matcher
+    /// resolves `mcp:{name}/*` down to per-tool checks at invoke time.
+    /// Expired grants are skipped. Returns the number of rules added.
+    pub async fn load_mcp_policies(&self, pool: &PgPool) -> anyhow::Result<usize> {
+        // (server_name, user_id, dept_id) — org_id comes along for logging.
+        let rows: Vec<(String, Option<String>, Option<String>, String)> = sqlx::query_as(
+            r#"SELECT ms.name,
+                      mp.user_id::text,
+                      mp.dept_id::text,
+                      mp.org_id::text
+               FROM mcp_permissions mp
+               JOIN mcp_servers ms ON ms.id = mp.mcp_server_id
+               WHERE ms.is_active
+                 AND (mp.expires_at IS NULL OR mp.expires_at > NOW())"#,
+        )
+        .fetch_all(pool)
+        .await?;
+
+        // Build one CSV blob = embedded seed + DB grants, then swap in a
+        // fresh enforcer. (Adding rules one-by-one would hold the std
+        // RwLock write guard across await points — not Send, and a
+        // poisoned-lock risk; the whole-swap path keeps the lock hold
+        // window sync-only, same as reload_policy.)
+        let mut policy_text = POLICIES_CSV.to_string();
+        let added = rows.len();
+        for (server, user_id, dept_id, org_id) in rows {
+            let sub = user_id.unwrap_or_else(|| "*".to_string());
+            let dept = dept_id.unwrap_or_else(|| "*".to_string());
+            policy_text.push_str(&format!(
+                "\np, {sub}, *, {dept}, mcp:{server}/*, invoke\n"
+            ));
+            tracing::debug!(%server, %org_id, "MCP grant staged for Casbin");
+        }
+
+        let model = DefaultModel::from_str(MODEL_CONF).await?;
+        let adapter = StringAdapter::new(&policy_text);
+        let fresh = Enforcer::new(model, adapter).await?;
+
+        let mut guard = self
+            .enforcer
+            .write()
+            .map_err(|_| anyhow::anyhow!("RbacService lock poisoned"))?;
+        *guard = fresh;
+
+        tracing::info!("MCP permissions loaded from DB into Casbin");
+        Ok(added)
+    }
+
     /// Reload policies from the embedded CSV and swap in a fresh enforcer.
+    ///
+    /// Note: DB-driven MCP grants ([`Self::load_mcp_policies`]) are NOT part
+    /// of the embedded CSV — callers that reload must re-run the DB load.
     pub async fn reload_policy(&self) -> anyhow::Result<()> {
         let model = DefaultModel::from_str(MODEL_CONF).await?;
         let adapter = StringAdapter::new(POLICIES_CSV);
@@ -195,7 +250,14 @@ pub fn enforce_tool(user_ctx: &UserContext, tool_name: &str) -> Result<()> {
 /// Resource/action mapping for a tool name (shared by the two gate sites):
 /// returns `(resource, action, audit_action)`.
 fn tool_resource(tool_name: &str) -> Result<(String, &'static str, &'static str)> {
-    if let Some(rest) = tool_name.strip_prefix("mcp:") {
+    // Accept both `mcp:server/tool` and `mcp_server/tool` forms; normalize
+    // the underscore variant to the canonical `mcp:` Casbin object so the
+    // engine gate (pre_tool_call_check) no longer dead-ends underscore names
+    // before they can reach the MCP dispatch in route_tool_call.
+    if let Some(rest) = tool_name
+        .strip_prefix("mcp:")
+        .or_else(|| tool_name.strip_prefix("mcp_"))
+    {
         if rest.split_once('/').is_none() {
             return Err(AppError::BadRequest(format!(
                 "Malformed MCP tool name '{tool_name}' — expected mcp:server/tool"
@@ -324,6 +386,48 @@ mod tests {
         s.reload_policy().await.unwrap();
         assert!(s.check_permission("u1", "designer", "d1", "skill:fabric-query", "execute"));
         assert!(!s.check_permission("u1", "viewer", "d1", "skill:fabric-query", "execute"));
+    }
+
+    #[tokio::test]
+    async fn keymatch_server_level_grant_resolves_per_tool() {
+        // DB-loaded grants use obj = mcp:{server}/*; the keyMatch matcher
+        // must resolve that to the per-tool resource the engine checks.
+        let s = svc().await;
+        // embedded seed: designer → mcp:local-mock/fabric_search_db (exact)
+        assert!(s.check_permission(
+            "u1",
+            "designer",
+            "d1",
+            "mcp:local-mock/fabric_search_db",
+            "invoke"
+        ));
+        // server-level grant shape (as load_mcp_policies generates) matches
+        // any tool under that server, and nothing under another server.
+        let model = MODEL_CONF;
+        let csv = "p, u9, *, *, mcp:enterprise-fabric/*, invoke\n";
+        let s2 = RbacService::from_strings(model, csv).await.unwrap();
+        assert!(s2.check_permission(
+            "u9",
+            "viewer",
+            "d1",
+            "mcp:enterprise-fabric/textile_search",
+            "invoke"
+        ));
+        assert!(!s2.check_permission(
+            "u9",
+            "viewer",
+            "d1",
+            "mcp:other-server/textile_search",
+            "invoke"
+        ));
+        // action mismatch still denied
+        assert!(!s2.check_permission(
+            "u9",
+            "viewer",
+            "d1",
+            "mcp:enterprise-fabric/textile_search",
+            "read"
+        ));
     }
 
     #[test]

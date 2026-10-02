@@ -118,17 +118,91 @@ async fn main() -> Result<()> {
         );
     }
 
-        // ── MCP Server registration ──────────────────────────────────────────
+    // ── MCP Server registration ──────────────────────────────────────────
     // Register active MCP servers from DB into the global manager.
     // Failures are logged but non-fatal — MCP is an optional component.
+    //
+    // P1-2: registration is scoped to ONE org — the MCP manager is
+    // process-global, so servers of other orgs must never be registered.
+    // Scope = MCP_ORG_ID when set; otherwise auto-select if exactly one org
+    // owns active servers; multiple orgs without MCP_ORG_ID → fail closed
+    // (register nothing) rather than leak servers across orgs.
     {
         let pool = session_store.pool();
-        match sqlx::query_as::<_, (uuid::Uuid, String, Option<String>, Option<String>)>(
-            "SELECT id, name, endpoint, auth_token FROM mcp_servers WHERE is_active = true",
-        )
-        .fetch_all(pool)
-        .await
-        {
+
+        let org_scope: Option<uuid::Uuid> = match &config.mcp_org_id {
+            Some(raw) => match uuid::Uuid::parse_str(raw) {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    tracing::error!(error = %e, raw = %raw, "MCP_ORG_ID is not a valid UUID — MCP registration skipped (fail-closed)");
+                    None
+                }
+            },
+            None => {
+                let orgs: Vec<uuid::Uuid> = sqlx::query_scalar(
+                    "SELECT DISTINCT org_id FROM mcp_servers WHERE is_active = true",
+                )
+                .fetch_all(pool)
+                .await
+                .unwrap_or_default();
+                match orgs.len() {
+                    0 => None,
+                    1 => Some(orgs[0]),
+                    n => {
+                        tracing::error!(
+                            orgs = n,
+                            "multiple orgs own active MCP servers and MCP_ORG_ID is unset — MCP registration skipped (fail-closed)"
+                        );
+                        None
+                    }
+                }
+            }
+        };
+
+        // Distinguish "no active servers" from "scope resolution failed":
+        // an explicit/derived scope of None with active servers present is a
+        // hard skip; when the tables are simply empty the SELECT is a no-op.
+        let scope_failed = match &config.mcp_org_id {
+            Some(_) => org_scope.is_none(),
+            None => {
+                let active: i64 =
+                    sqlx::query_scalar("SELECT count(*) FROM mcp_servers WHERE is_active = true")
+                        .fetch_one(pool)
+                        .await
+                        .unwrap_or(0);
+                active > 0 && org_scope.is_none()
+            }
+        };
+        if scope_failed {
+            tracing::warn!("MCP server registration skipped this boot (org scope unresolved)");
+        }
+
+        let rows: Vec<(uuid::Uuid, String, Option<String>, Option<String>)> = if scope_failed {
+            vec![]
+        } else if let Some(org) = org_scope {
+            sqlx::query_as(
+                "SELECT id, name, endpoint, auth_token FROM mcp_servers WHERE is_active = true AND org_id = $1",
+            )
+            .bind(org)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "MCP server query failed");
+                vec![]
+            })
+        } else {
+            sqlx::query_as(
+                "SELECT id, name, endpoint, auth_token FROM mcp_servers WHERE is_active = true",
+            )
+            .fetch_all(pool)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "MCP server query failed");
+                vec![]
+            })
+        };
+
+        match Ok::<_, sqlx::Error>(rows) {
             Ok(rows) => {
                 for (id, name, endpoint, auth_token) in rows {
                     let base_url = endpoint.unwrap_or_default();
@@ -153,7 +227,7 @@ async fn main() -> Result<()> {
         }
     }
 
-// ── SKILL Engine ────────────────────────────────────────────────────────────
+    // ── SKILL Engine ────────────────────────────────────────────────────────────
     // 不再只依赖 cwd/skills：按 SKILLS_DIR → 可执行文件相对 → 工作目录相对
     // 的顺序定位，避免从其它目录启动时找不到 skill。找不到时 load 会 fail-fast。
     let skills_dir = resolve_skills_dir();
@@ -183,6 +257,17 @@ async fn main() -> Result<()> {
     crate::rbac::RBAC_SERVICE
         .set((*rbac).clone())
         .map_err(|_| anyhow::anyhow!("RBAC_SERVICE already initialised"))?;
+
+    // P1-2: enterprise MCP grants live in mcp_permissions (data-driven),
+    // not the embedded policies.csv. Load them into the enforcer at boot;
+    // failure only loses DB-sourced grants — embedded seed policies remain.
+    match rbac.load_mcp_policies(session_store.pool()).await {
+        Ok(n) => tracing::info!("Casbin MCP grants loaded from DB: {n}"),
+        Err(e) => tracing::warn!(
+            error = %e,
+            "failed to load MCP permissions from DB — only embedded seed policies active"
+        ),
+    }
 
     // ── Fashion DB store (global for detached executors) ─────────────────────
     let fashion_store = crate::skill_engine::FashionStore::new(session_store.pool().clone());

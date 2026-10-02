@@ -497,6 +497,7 @@ mod tests {
             redis_url: String::new(),
             qdrant_url: String::new(),
             core_port: 0,
+            mcp_org_id: None,
             llm_provider: provider.into(),
             llm_timeout_secs: 60,
             minimax_api_key: minimax_key.into(),

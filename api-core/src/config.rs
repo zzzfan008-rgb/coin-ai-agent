@@ -45,6 +45,10 @@ pub struct AppConfig {
     pub minio_access_key: String,
     pub minio_secret_key: String,
 
+    // MCP multi-tenancy (P1-2): pin process-global MCP registration to one
+    // org. Unset → auto-select when exactly one org owns active servers.
+    pub mcp_org_id: Option<String>,
+
     // SSE timeouts (T-022)
     /// Max seconds without data before sending a keepalive comment.
     /// Keepalive interval = min(45s, SSE_IDLE_TIMEOUT_SECS / 2).
@@ -74,6 +78,10 @@ impl AppConfig {
             qdrant_url: env_var("QDRANT_URL", "http://localhost:6333"),
 
             core_port: env_parse("CORE_PORT", 8081),
+
+            mcp_org_id: std::env::var("MCP_ORG_ID")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
 
             llm_provider: env_var("LLM_PROVIDER", "minimax"),
             llm_timeout_secs: env_parse("LLM_TIMEOUT_SECS", 60),
