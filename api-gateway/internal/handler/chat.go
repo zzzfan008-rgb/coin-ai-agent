@@ -119,6 +119,22 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 		req.Model = "deepseek-v4-flash"
 	}
 
+	// ── Persist user message BEFORE proxying upstream ──
+	// The Rust core persists the assistant reply the moment run_turn finishes,
+	// which is before the SSE headers even reach us; saving the user message
+	// pre-request guarantees user.created_at < assistant.created_at in the DB,
+	// so the frontend renders the conversation in the right order.
+	if hasSession && h.sessSvc != nil {
+		for i := len(req.Messages) - 1; i >= 0; i-- {
+			if req.Messages[i].Role == "user" && req.Messages[i].Content != "" {
+				if err := h.sessSvc.SaveMessage(ctx, sessionID, "user", req.Messages[i].Content, req.Model); err != nil {
+					log.Printf("[chat completions] SaveMessage(user) error: %v", err)
+				}
+				break
+			}
+		}
+	}
+
 	// ── Primary path: Rust core (skill engine + intent router + RAG retrieval) ──
 	coreOK := false
 	resp, err = h.chatSvc.ProxyRequestWithContext(ctx, req, userID, orgID, deptID, role, middleware.GetClientIP(r))
@@ -175,18 +191,6 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Persist user message (last user msg in history)
-		if hasSession && h.sessSvc != nil {
-			for i := len(req.Messages) - 1; i >= 0; i-- {
-				if req.Messages[i].Role == "user" && req.Messages[i].Content != "" {
-					if err := h.sessSvc.SaveMessage(ctx, sessionID, "user", req.Messages[i].Content, req.Model); err != nil {
-						log.Printf("[chat completions] SaveMessage(user) error: %v", err)
-					}
-					break
-				}
-			}
-		}
-
 		buf := make([]byte, 4096)
 		first := true
 		var assistantBuf bytes.Buffer
@@ -217,17 +221,6 @@ func (h *ChatHandler) Completions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
-		if hasSession && h.sessSvc != nil {
-			for i := len(req.Messages) - 1; i >= 0; i-- {
-				if req.Messages[i].Role == "user" && req.Messages[i].Content != "" {
-					if err := h.sessSvc.SaveMessage(ctx, sessionID, "user", req.Messages[i].Content, req.Model); err != nil {
-						log.Printf("[chat completions] SaveMessage(user) error: %v", err)
-					}
-					break
-				}
-			}
-		}
-
 		var buf bytes.Buffer
 		io.Copy(&buf, resp.Body)
 		w.Header().Set("Content-Type", "application/json")
