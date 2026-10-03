@@ -149,9 +149,7 @@ impl RbacService {
         for (server, user_id, dept_id, org_id) in rows {
             let sub = user_id.unwrap_or_else(|| "*".to_string());
             let dept = dept_id.unwrap_or_else(|| "*".to_string());
-            policy_text.push_str(&format!(
-                "\np, {sub}, *, {dept}, mcp:{server}/*, invoke\n"
-            ));
+            policy_text.push_str(&format!("\np, {sub}, *, {dept}, mcp:{server}/*, invoke\n"));
             tracing::debug!(%server, %org_id, "MCP grant staged for Casbin");
         }
 

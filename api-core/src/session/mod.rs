@@ -24,6 +24,17 @@ impl SessionStore {
         Ok(Self { pool })
     }
 
+    /// Build a session store whose pool connects lazily on first query.
+    /// Construction never touches the network; `health_check` reports
+    /// `false` when the database is unreachable. Used by integration
+    /// tests and degraded-mode probes.
+    pub fn lazy(database_url: &str) -> Result<Self> {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy(database_url)?;
+        Ok(Self { pool })
+    }
+
     /// Verify connectivity. Schema provisioning is T-003's job
     /// (`migrations/001_init_schema.sql`).
     pub async fn migrate(&self) -> Result<()> {
