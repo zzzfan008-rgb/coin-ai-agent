@@ -15,7 +15,6 @@ use api_core::images::ImageSearchService;
 use api_core::intent::IntentRouter;
 use api_core::llm::LlmClient;
 use api_core::rag::RagRetriever;
-use api_core::rbac::RbacService;
 use api_core::session::SessionStore;
 use api_core::{api, AppServices, AppState};
 
@@ -67,7 +66,6 @@ pub async fn test_state() -> AppState {
     let session_store =
         Arc::new(SessionStore::lazy(&config.database_url).expect("lazy session pool"));
     let llm_client = Arc::new(LlmClient::new(&config).expect("llm client"));
-    let rbac = Arc::new(RbacService::new().await.expect("rbac service"));
     let rag_retriever = Arc::new(RagRetriever::new(Default::default()));
     let intent_router = Arc::new(
         IntentRouter::load_or_embedded(std::path::Path::new("/nonexistent/intent-rules.yaml"))
@@ -78,7 +76,6 @@ pub async fn test_state() -> AppState {
         config,
         session_store,
         llm_client,
-        rbac,
         rag_retriever,
         intent_router,
         image_search,

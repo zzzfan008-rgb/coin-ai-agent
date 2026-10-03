@@ -7,10 +7,13 @@
 //! `policies.csv`) and copied into an in-memory [`StringAdapter`], so the
 //! enforcer needs no external files at runtime.
 //!
-//! Two ways to reach the service:
-//!   - [`AppServices::rbac`] — injected into HTTP handlers via `AppState`;
-//!   - [`RBAC_SERVICE`] global — used by detached agent-loop free functions
-//!     (`skill_engine::executor::route_tool_call`) that have no `State`.
+//! Single access route: the process-global [`RBAC_SERVICE`]. It is
+//! initialised once in `run()` before the server starts, and every
+//! enforcement site reaches it through [`service`]: the HTTP tool gate
+//! `middleware::pre_tool_call_check` (via [`enforce_tool`]) and the
+//! detached agent-loop free function
+//! `skill_engine::executor::route_tool_call`, neither of which has a
+//! `State` to carry a per-instance handle.
 
 #![allow(dead_code)]
 
