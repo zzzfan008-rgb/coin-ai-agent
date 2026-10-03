@@ -28,9 +28,14 @@ impl SessionStore {
     /// Construction never touches the network; `health_check` reports
     /// `false` when the database is unreachable. Used by integration
     /// tests and degraded-mode probes.
+    ///
+    /// `acquire_timeout` is capped at 500ms — without it, a refused
+    /// connection makes `Pool::acquire` retry for sqlx's default 30s and
+    /// `/health` blocks until the HTTP client times out.
     pub fn lazy(database_url: &str) -> Result<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_millis(500))
             .connect_lazy(database_url)?;
         Ok(Self { pool })
     }

@@ -26,7 +26,12 @@ pub fn test_config() -> AppConfig {
     AppConfig {
         app_env: "test".into(),
         log_level: "info".into(),
-        database_url: "postgres://test@127.0.0.1:5432/no_db".into(),
+        // Port 15432 — a deliberately dead port. (5432 is unsafe as a
+        // "no DB" assumption: both this machine and GitHub runners can
+        // have a live PostgreSQL there.) A refused connection is retried
+        // by sqlx's acquire loop, but SessionStore::lazy caps
+        // acquire_timeout at 500ms, so /health still answers fast.
+        database_url: "postgres://test@127.0.0.1:15432/no_db".into(),
         db_max_connections: 1,
         redis_url: String::new(),
         qdrant_url: "http://127.0.0.1:6333".into(),
