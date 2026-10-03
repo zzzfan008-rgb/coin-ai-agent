@@ -34,7 +34,11 @@ pub fn test_config() -> AppConfig {
         database_url: "postgres://test@127.0.0.1:15432/no_db".into(),
         db_max_connections: 1,
         redis_url: String::new(),
-        qdrant_url: "http://127.0.0.1:6333".into(),
+        // Same reasoning as the DB port above — 6333 (Qdrant default) may
+        // host a real instance on dev machines or CI runners, so use a
+        // deliberately dead port: any future RAG/image assertion must not
+        // silently bind to whatever happens to be listening.
+        qdrant_url: "http://127.0.0.1:16333".into(),
         core_port: 0,
         llm_provider: "minimax".into(),
         llm_timeout_secs: 5,
