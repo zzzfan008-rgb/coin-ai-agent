@@ -256,6 +256,15 @@
   - 明确 GPU 硬件是否满足要求（不足则给出最低规格建议）
 ```
 
+**T-026 实施记录（2026-10-05）**
+- POC 第一阶段完成，报告：`docs/t026-clip-poc-phase1.md`；脚本：`scripts/clip_poc_server.py`（FastAPI :8399，契约对齐 ClipClient Generic 模式）、`scripts/clip_poc_bench.py`。
+- 决策点 1 结论：本机 MacBook Air M4 / 16GB **无独立 GPU**；MPS 单张仅快 18%、批量吞吐反慢 25%（43 vs 32 img/s）、文本 P99 劣化 4.6x → 本地服务用 **CPU device**。
+- 基准：CPU 端到端 P50 54.2ms / MPS 43.5ms；吞吐 CPU 42.99 img/s；dim=512 双路一致。数据：`data/poc_clip_bench.json`（gitignored）。
+- 验收「服务可运行 + 正确维度」已 curl 实测（image/text 均 512 维）；质量基线沿用 T-024（40.24%）。
+- **外部阻塞**：DashScope recall 对比缺 `DASHSCOPE_API_KEY`（.env 无）；key 到位后同脚本补跑即可。
+- ADR 草案：混合 fallback 值得做；维度对齐推荐双集合共存（collection 元数据标 dim/model）；未来 ViT-L/14 生产化最低建议 8GB VRAM GPU。供 T-027 执行。
+- 备注：backend agent 实施中断（provider 超时），环境补装/基准/报告由 orchestrator 收尾；T-027 接线（api-core ↔ localhost）未动。
+
 ---
 
 ### T-027: 混合 CLIP 落地（本地模型 + API fallback）
