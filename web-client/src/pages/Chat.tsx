@@ -273,7 +273,6 @@ export default function Chat() {
                       const input = document.querySelector('textarea') as HTMLTextAreaElement
                       if (input) {
                         input.value = hint
-                        // eslint-disable-next-line no-undef
                         input.dispatchEvent(new Event('input', { bubbles: true }))
                         input.focus()
                       }

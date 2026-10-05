@@ -56,6 +56,8 @@ export default [
       'jsx-a11y': jsxA11y,
     },
     rules: {
+      // typescript-eslint 官方建议：tsc 已做类型/未定义检查，no-undef 对 TS 文件冗余
+      'no-undef': 'off',
       // Disable base no-unused-vars so @typescript-eslint/no-unused-vars controls it
       'no-unused-vars': 'off',
       ...reactHooks.configs.recommended.rules,
