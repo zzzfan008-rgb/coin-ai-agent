@@ -37,6 +37,29 @@ async fn health_returns_degraded_json_when_backends_down() {
     );
 }
 
+/// Test harness now serves `api_core::build_router()` — the exact
+/// production middleware stack. This pins the CORS layer: a request with an
+/// Origin header must come back with `access-control-allow-origin` (F4).
+#[tokio::test]
+async fn cors_layer_is_active_on_health() {
+    let base = common::spawn_app(common::test_state().await).await;
+    let resp = common::client()
+        .get(format!("{base}/health"))
+        .header(reqwest::header::ORIGIN, "https://example.com")
+        .send()
+        .await
+        .expect("GET /health with Origin");
+
+    assert_eq!(resp.status().as_u16(), 200, "health must not 5xx");
+    assert_eq!(
+        resp.headers()
+            .get(reqwest::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .and_then(|v| v.to_str().ok()),
+        Some("*"),
+        "permissive CORS must answer access-control-allow-origin: *"
+    );
+}
+
 /// SSE regression: the stream endpoint must answer with
 /// `content-type: text/event-stream` and emit single-prefixed `data: `
 /// events — never the old `data: data: ` double prefix that broke

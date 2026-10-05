@@ -2,7 +2,9 @@
 //!
 //! Every dependency is wired to unreachable local endpoints — no test
 //! touches a real PostgreSQL, LLM provider or Qdrant instance. The router
-//! under test is the production `api::routes()` served over real HTTP.
+//! under test is the production `api_core::build_router()` — the same
+//! routes + middleware stack (TraceLayer + CorsLayer) served by `run()` —
+//! not a bare `api::routes()`.
 
 #![allow(dead_code)]
 
@@ -16,7 +18,7 @@ use api_core::intent::IntentRouter;
 use api_core::llm::LlmClient;
 use api_core::rag::RagRetriever;
 use api_core::session::SessionStore;
-use api_core::{api, AppServices, AppState};
+use api_core::{AppServices, AppState};
 
 /// AppConfig wired to unreachable local endpoints.
 /// `minimax_api_key` must be non-empty: `LlmClient::new` fail-fasts when
@@ -82,10 +84,12 @@ pub async fn test_state() -> AppState {
     })
 }
 
-/// Serve the production `api::routes()` on an ephemeral loopback port.
-/// Returns the base URL, e.g. `http://127.0.0.1:34567`.
+/// Serve the production router — `api_core::build_router()`, the same
+/// routes + middleware stack (TraceLayer + CorsLayer) as `run()` — on an
+/// ephemeral loopback port. Returns the base URL, e.g.
+/// `http://127.0.0.1:34567`.
 pub async fn spawn_app(state: AppState) -> String {
-    let app = api::routes().with_state(state);
+    let app = api_core::build_router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind test listener");

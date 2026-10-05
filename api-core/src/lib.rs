@@ -84,6 +84,20 @@ fn resolve_skills_dir() -> std::path::PathBuf {
     std::path::PathBuf::from("skills")
 }
 
+/// Build the production HTTP router: routes + middleware stack.
+///
+/// Shared by [`run`] (binary entry point) and the integration-test harness in
+/// `tests/common/mod.rs`, so tests exercise exactly the production middleware
+/// chain — not a bare `api::routes()`. Layer order matters: tracing outermost,
+/// CORS inside it, state last.
+pub fn build_router(state: AppState) -> Router {
+    Router::new()
+        .merge(api::routes())
+        .layer(TraceLayer::new_for_http())
+        .layer(CorsLayer::permissive())
+        .with_state(state)
+}
+
 /// Boot the full service: load config, build every dependency, bind and serve.
 /// Called by the binary entry point in `src/main.rs`.
 pub async fn run() -> Result<()> {
@@ -360,11 +374,7 @@ pub async fn run() -> Result<()> {
 
     // ── Router ──────────────────────────────────────────────────────────────
     let port = services.config.core_port;
-    let app = Router::new()
-        .merge(api::routes())
-        .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
-        .with_state(services);
+    let app = build_router(services.clone());
 
     // ── Listen ──────────────────────────────────────────────────────────────
     let addr: SocketAddr = format!("0.0.0.0:{port}").parse()?;
