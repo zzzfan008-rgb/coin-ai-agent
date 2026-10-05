@@ -149,6 +149,7 @@ async function readError(res: Response): Promise<Error> {
     // 非 JSON 错误响应，保留默认消息
   }
   if (res.status === 401) message = message || '用户名或密码错误'
+  if (res.status === 409) message = '资源已存在，请换一个试试'
   return new Error(message)
 }
 
