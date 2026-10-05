@@ -68,6 +68,24 @@
   - 既有用户数据迁移后无丢失/损坏（幂等迁移，重复跑行数不变）
 ```
 
+#### T-020 实施记录（2026-10-05，orchestrator 勘察）
+
+- **DB 唯一约束：已存在，无需新建迁移**。`migrations/001_init_schema.sql:65`
+  已有 `CONSTRAINT uq_user_username_org UNIQUE (org_id, username)`（附
+  `migrations/001_init_schema.sql:324` 复合索引）。卡片原交付物
+  `migrations/017_user_org_username_unique.sql` 不再需要——017 号迁移不存在
+  （migrations 目录 001/008-012/014-016/018-020），任何新库建表即含约束。
+- **产品决策：保持 username 全局唯一，不采纳「不同 org 相同用户名 → 201」**。
+  原因：`api-gateway/internal/service/service.go:147-159` Login 按
+  `username` 单字段查找、无 org 参数；若放开为 (org_id, username) 唯一，
+  登录将产生跨租户歧义（需先选 org 才能验密）。当前 register
+  （`service.go:71-`）每次注册新建 org，同 org 重复注册在注册路径不可达；
+  全局查重（`service.go:79`）是对该语义的实现。
+- **409 路径：已实现**。`api-gateway/internal/handler/handler.go:57-58`
+  捕获 `service.ErrUserExists`（`service.go:22`）→ 409 "username already exists"。
+- **进行中**：backend 补「二次注册 → 409」测试覆盖（此前 0 覆盖，handler_test
+  仅含参数校验测试）；前端 409 友好文案随后由 frontend 处理。
+
 ---
 
 ### T-021: JWT 迁移 httpOnly Cookie（防 XSS）
