@@ -16,6 +16,7 @@ import (
 	"fashionai/api-gateway/pkg/auth"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 )
 
 var (
@@ -26,6 +27,29 @@ var (
 	ErrDeptNotFound    = errors.New("department not found")
 	ErrProjectNotFound = errors.New("project not found")
 )
+
+// isUsernameUniqueViolation reports whether err is a PostgreSQL 23505
+// (unique_violation) raised by either username uniqueness guard:
+//
+//   - uq_users_username_global — 021 迁移新建的全局唯一索引（并发注册兜底）
+//   - uq_user_username_org     — 001 的 (org_id, username) 组合约束
+//
+// 其它约束名（如 uq_organizations_slug）或非 23505 错误一律返回 false，
+// 由调用方原样上抛，避免把无关的数据库冲突误报成"用户名已存在"。
+func isUsernameUniqueViolation(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+	if pqErr.Code != "23505" {
+		return false
+	}
+	switch pqErr.Constraint {
+	case "uq_users_username_global", "uq_user_username_org":
+		return true
+	}
+	return false
+}
 
 type AuthService struct {
 	db           *sqlx.DB
@@ -120,6 +144,15 @@ func (s *AuthService) Register(ctx context.Context, req model.RegisterRequest) (
 		 VALUES($1,$2,$3,$4,$5,$6,'designer') RETURNING id`,
 		orgID, deptID, req.Username, pwHash, displayName, req.Email)
 	if err != nil {
+		// 并发边界收口（T-020）：应用层 EXISTS 查重是快速路径，两个并发
+		// 同名注册可能同时通过查重。此处捕获数据库唯一约束冲突兜底：
+		// 全局唯一索引 uq_users_username_global（021 迁移）或 001 的组合
+		// 约束 uq_user_username_org 命中都映射为 ErrUserExists（handler
+		// 自动 409）；其它约束名（如 uq_organizations_slug）不做映射，
+		// 原样上抛，不误吞。
+		if isUsernameUniqueViolation(err) {
+			return nil, ErrUserExists
+		}
 		return nil, fmt.Errorf("create user: %w", err)
 	}
 

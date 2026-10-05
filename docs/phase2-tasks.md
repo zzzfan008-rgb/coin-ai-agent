@@ -85,6 +85,11 @@
   捕获 `service.ErrUserExists`（`service.go:22`）→ 409 "username already exists"。
 - **进行中**：backend 补「二次注册 → 409」测试覆盖（此前 0 覆盖，handler_test
   仅含参数校验测试）；前端 409 友好文案随后由 frontend 处理。
+- **race 边界已收口（2026-10-05）**：新增 `migrations/021_user_username_global_unique.sql`
+  （跨 org 重复检测 DO block + `uq_users_username_global` 全局唯一索引，001 组合
+  约束保持不变），`service.go` 的 users INSERT 捕获 23505 并按约束名过滤映射
+  `ErrUserExists`（仅 `uq_users_username_global` / `uq_user_username_org`），并发
+  同名注册不再各自建 org 后双插成功。handler 409 路径无需改动。
 
 ---
 
