@@ -409,6 +409,7 @@
 - Hybrid fallback 到 DashScope 时检索的是只读存量 `style_images`（1024）；全新环境若无该集合，fallback 检索降级为空结果（不报错），待 DashScope 侧专用集合决策后再补（属 T-027 最终形态决策范围）。
 - 健康探活为按需触发（GET /health 时），无后台周期探活/告警推送——当前规模足够，需要时再加。
 - DashScope recall 对照（T-026 遗留）仍等 API key。
+- **F1 处置（2026-10-06）**：hybrid 生产启用暂缓——缺省 provider 未开 hybrid，增量 2 双集合路由（ce24233）已合入，待上一条「DashScope 侧专用集合决策」与「全新环境降级」两项落定后再考虑放开。
 
 ---
 
