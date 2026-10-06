@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use api_core::config::AppConfig;
+use api_core::images::clip::{ClipClient, ClipConfig};
 use api_core::images::ImageSearchService;
 use api_core::intent::IntentRouter;
 use api_core::llm::LlmClient;
@@ -62,8 +63,36 @@ pub fn test_config() -> AppConfig {
     }
 }
 
+/// Hermetic image search: local mode pointed at dead ports (18399 CLIP,
+/// 16333 Qdrant). `ImageSearchService::from_env` reads real env vars and
+/// would default the local CLIP probe at 8399 — on machines running the
+/// POC that makes tests touch a real service — so tests construct the
+/// service explicitly like everything else.
+pub fn hermetic_image_search() -> ImageSearchService {
+    let config = ClipConfig {
+        provider: "local".into(),
+        api_endpoint: String::new(),
+        api_key: String::new(),
+        model: String::new(),
+        local_base_url: "http://127.0.0.1:18399".into(),
+        local_timeout: Duration::from_secs(1),
+    };
+    let collection = api_core::images::style_collection_name("local", "clip-vit-base-patch32", 512);
+    ImageSearchService::new(
+        ClipClient::new(config),
+        "http://127.0.0.1:16333",
+        vec![(512, collection, true)],
+    )
+}
+
 /// Build the production `AppServices` graph without any live backend.
 pub async fn test_state() -> AppState {
+    test_state_with(hermetic_image_search()).await
+}
+
+/// Build the graph with an injected image service (tests that need a
+/// wiremock-backed local CLIP use this).
+pub async fn test_state_with(image_search: ImageSearchService) -> AppState {
     let config = test_config();
     let session_store =
         Arc::new(SessionStore::lazy(&config.database_url).expect("lazy session pool"));
@@ -73,14 +102,13 @@ pub async fn test_state() -> AppState {
         IntentRouter::load_or_embedded(std::path::Path::new("/nonexistent/intent-rules.yaml"))
             .expect("embedded intent rules"),
     );
-    let image_search = Arc::new(ImageSearchService::from_env());
     Arc::new(AppServices {
         config,
         session_store,
         llm_client,
         rag_retriever,
         intent_router,
-        image_search,
+        image_search: Arc::new(image_search),
     })
 }
 

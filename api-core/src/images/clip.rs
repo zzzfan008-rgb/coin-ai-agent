@@ -71,6 +71,18 @@ pub enum ClipMode {
     Hybrid,
 }
 
+impl ClipMode {
+    /// Stable wire name (also used in health output).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ClipMode::Generic => "generic",
+            ClipMode::DashScope => "dashscope",
+            ClipMode::Local => "local",
+            ClipMode::Hybrid => "hybrid",
+        }
+    }
+}
+
 /// Which provider actually served an encode request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClipProviderId {
@@ -111,6 +123,66 @@ impl ClipEmbedding {
     pub fn provider_str(&self) -> &'static str {
         self.provider.as_str()
     }
+}
+
+// ── Fallback event recording (T-027 health monitoring) ─────────────────────
+
+/// Snapshot of the most recent hybrid fallback, surfaced on the health
+/// endpoint so degradations are observable after the fact — per-request
+/// `warn!` logs alone are not a health surface.
+#[derive(Debug, Clone)]
+pub struct FallbackSnapshot {
+    /// RFC 3339 UTC timestamp of the fallback.
+    pub at: String,
+    /// Why the primary (local) provider failed.
+    pub reason: String,
+    /// Elapsed time the local attempt took before failing (ms).
+    pub elapsed_ms: u64,
+}
+
+static LAST_FALLBACK: once_cell::sync::OnceCell<std::sync::RwLock<Option<FallbackSnapshot>>> =
+    once_cell::sync::OnceCell::new();
+
+fn fallback_cell() -> &'static std::sync::RwLock<Option<FallbackSnapshot>> {
+    LAST_FALLBACK.get_or_init(|| std::sync::RwLock::new(None))
+}
+
+/// Record the most recent fallback event (called from hybrid dispatch
+/// alongside the `warn!` log).
+pub fn record_fallback(reason: impl Into<String>, elapsed_ms: u64) {
+    let snapshot = FallbackSnapshot {
+        at: chrono::Utc::now().to_rfc3339(),
+        reason: reason.into(),
+        elapsed_ms,
+    };
+    *fallback_cell().write().expect("fallback lock poisoned") = Some(snapshot);
+}
+
+/// The most recent fallback event, if any, since process start.
+pub fn last_fallback() -> Option<FallbackSnapshot> {
+    fallback_cell()
+        .read()
+        .expect("fallback lock poisoned")
+        .clone()
+}
+
+// ── Local endpoint health probe ─────────────────────────────────────────────
+
+/// Result of probing the local CLIP service's `/health` endpoint.
+#[derive(Debug, Clone)]
+pub struct LocalHealth {
+    /// Whether the active mode uses a local endpoint (Local/Hybrid).
+    pub configured: bool,
+    /// Whether `GET {base}/health` returned 2xx.
+    pub reachable: bool,
+    /// Probed base URL.
+    pub endpoint: String,
+    /// Fields reported by the local service (absent when unreachable).
+    pub model: Option<String>,
+    pub device: Option<String>,
+    pub dim: Option<usize>,
+    /// Failure detail when not reachable.
+    pub error: Option<String>,
 }
 
 /// Explicit client configuration. `ClipClient::from_env()` is the production
@@ -231,6 +303,85 @@ impl ClipClient {
         &self.model
     }
 
+    /// Active provider mode.
+    pub fn mode(&self) -> ClipMode {
+        self.mode
+    }
+
+    /// Configured local base URL (empty when unset).
+    pub fn local_base_url(&self) -> &str {
+        &self.local_base_url
+    }
+
+    /// Probe the local CLIP service's `/health` endpoint. Modes without a
+    /// local component return a `configured: false` result without any
+    /// network call. The probe timeout is the configured
+    /// `CLIP_LOCAL_TIMEOUT_SECS`.
+    pub async fn probe_local_health(&self) -> LocalHealth {
+        let uses_local = matches!(self.mode, ClipMode::Local | ClipMode::Hybrid);
+        if !uses_local {
+            return LocalHealth {
+                configured: false,
+                reachable: false,
+                endpoint: self.local_base_url.clone(),
+                model: None,
+                device: None,
+                dim: None,
+                error: None,
+            };
+        }
+        if self.local_base_url.is_empty() {
+            return LocalHealth {
+                configured: true,
+                reachable: false,
+                endpoint: String::new(),
+                model: None,
+                device: None,
+                dim: None,
+                error: Some("CLIP_LOCAL_BASE_URL is empty".into()),
+            };
+        }
+
+        let url = format!("{}/health", self.local_base_url.trim_end_matches('/'));
+        let response = self.http.get(&url).timeout(self.local_timeout).send().await;
+
+        match response {
+            Ok(resp) if resp.status().is_success() => {
+                let json: Value = resp.json().await.unwrap_or(Value::Null);
+                LocalHealth {
+                    configured: true,
+                    reachable: true,
+                    endpoint: self.local_base_url.clone(),
+                    model: json.get("model").and_then(|v| v.as_str()).map(String::from),
+                    device: json
+                        .get("device")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    dim: json.get("dim").and_then(|v| v.as_u64()).map(|n| n as usize),
+                    error: None,
+                }
+            }
+            Ok(resp) => LocalHealth {
+                configured: true,
+                reachable: false,
+                endpoint: self.local_base_url.clone(),
+                model: None,
+                device: None,
+                dim: None,
+                error: Some(format!("local CLIP /health returned {}", resp.status())),
+            },
+            Err(e) => LocalHealth {
+                configured: true,
+                reachable: false,
+                endpoint: self.local_base_url.clone(),
+                model: None,
+                device: None,
+                dim: None,
+                error: Some(format!("{e}")),
+            },
+        }
+    }
+
     /// Encode an image (raw file bytes, e.g. PNG/JPEG) into a CLIP vector.
     pub async fn encode_image(&self, image_bytes: &[u8]) -> Result<ClipEmbedding> {
         let generic_body = serde_json::json!({
@@ -301,6 +452,10 @@ impl ClipClient {
                     tracing::warn!(
                         "CLIP_PROVIDER=hybrid but CLIP_LOCAL_BASE_URL is empty — using DashScope directly"
                     );
+                    record_fallback(
+                        "CLIP_PROVIDER=hybrid but CLIP_LOCAL_BASE_URL is empty — using DashScope directly",
+                        0,
+                    );
                     let vector = self.call_dashscope(&dashscope_body).await?;
                     return Ok(ClipEmbedding {
                         vector,
@@ -314,12 +469,14 @@ impl ClipClient {
                         provider: ClipProviderId::Local,
                     }),
                     Err(LocalFailure::Fallbackable(e)) => {
+                        let elapsed_ms = started.elapsed().as_millis() as u64;
                         tracing::warn!(
                             provider = "dashscope",
-                            elapsed_ms = started.elapsed().as_millis() as u64,
+                            elapsed_ms,
                             error = %e,
                             "Local CLIP request failed — falling back to DashScope"
                         );
+                        record_fallback(format!("{e}"), elapsed_ms);
                         let vector = self.call_dashscope(&dashscope_body).await?;
                         Ok(ClipEmbedding {
                             vector,
@@ -1037,5 +1194,81 @@ mod tests {
             .expect("dashscope encode");
         assert_eq!(emb.provider, ClipProviderId::DashScope);
         assert_eq!(requests(&dashscope).await, 1);
+    }
+
+    // ── Local health probe + fallback recording (increment 2) ───────────────
+
+    #[tokio::test]
+    async fn local_health_probe_reports_reachable_service() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "model": "clip-vit-base-patch32",
+                "device": "cpu",
+                "dim": 512,
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ClipClient::new(test_config("local", &server.uri(), ""));
+        let health = client.probe_local_health().await;
+        assert!(health.configured);
+        assert!(health.reachable);
+        assert_eq!(health.endpoint, server.uri());
+        assert_eq!(health.model.as_deref(), Some("clip-vit-base-patch32"));
+        assert_eq!(health.device.as_deref(), Some("cpu"));
+        assert_eq!(health.dim, Some(512));
+        assert!(health.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn local_health_probe_reports_dead_port_as_unreachable() {
+        let client = ClipClient::new(test_config("local", DEAD_LOCAL_URL, ""));
+        let health = client.probe_local_health().await;
+        assert!(health.configured);
+        assert!(!health.reachable);
+        assert!(health.error.is_some());
+        assert_eq!(health.model, None);
+        assert_eq!(health.dim, None);
+    }
+
+    #[tokio::test]
+    async fn local_health_probe_is_skipped_without_local_mode() {
+        // DashScope mode has no local component: no probe, and a server on
+        // the (default) local URL must not be contacted.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let client = ClipClient::new(test_config("dashscope", &server.uri(), &server.uri()));
+        let health = client.probe_local_health().await;
+        assert!(!health.configured);
+        assert!(!health.reachable);
+        assert_eq!(
+            requests(&server).await,
+            0,
+            "probe must not run in dashscope mode"
+        );
+    }
+
+    #[test]
+    fn fallback_recorder_reports_last_event() {
+        // Global state: tolerate anything previously recorded; assert only
+        // that our own marked event is retrievable intact.
+        let marker = format!("unit-marker-{}", uuid::Uuid::new_v4());
+        record_fallback(marker.clone(), 17);
+        let snapshot = last_fallback().expect("a fallback was just recorded");
+        assert_eq!(snapshot.reason, marker);
+        assert_eq!(snapshot.elapsed_ms, 17);
+        assert!(
+            snapshot.at.contains('T'),
+            "timestamp must be RFC3339-ish: {}",
+            snapshot.at
+        );
     }
 }

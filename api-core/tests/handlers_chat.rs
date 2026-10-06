@@ -123,3 +123,99 @@ async fn chat_completions_rejects_get_with_405() {
         "GET on POST-only chat route must be 405"
     );
 }
+
+// ── CLIP health (T-027 increment 2) ─────────────────────────────────────────
+
+/// GET /health must report the CLIP section: active mode, and a local
+/// endpoint that is configured but unreachable (dead 18399) without the
+/// endpoint itself failing the request.
+#[tokio::test]
+async fn health_reports_clip_section_with_local_down() {
+    let base = common::spawn_app(common::test_state().await).await;
+    let resp = common::client()
+        .get(format!("{base}/health"))
+        .send()
+        .await
+        .expect("GET /health");
+    assert_eq!(resp.status().as_u16(), 200);
+
+    let body: serde_json::Value = resp.json().await.expect("health JSON");
+    let clip = &body["services"]["clip"];
+    assert_eq!(clip["mode"], "local");
+    assert_eq!(clip["model"], "clip-vit-base-patch32");
+    assert_eq!(clip["local"]["configured"], true);
+    assert_eq!(clip["local"]["reachable"], false);
+    assert_eq!(clip["local"]["endpoint"], "http://127.0.0.1:18399");
+    assert!(clip["local"]["error"].is_string());
+}
+
+/// GET /health with a wiremock-backed local CLIP reporting healthy must
+/// surface reachability fields and the most recent fallback event.
+#[tokio::test]
+async fn health_reports_clip_local_up_and_last_fallback() {
+    use api_core::images::clip::{record_fallback, ClipClient, ClipConfig};
+    use api_core::images::style_collection_name;
+    use api_core::images::ImageSearchService;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // Local CLIP: /health 200 with POC-contract fields.
+    let local = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status": "ok",
+            "model": "clip-vit-base-patch32",
+            "device": "cpu",
+            "dim": 512,
+            "degraded": false,
+        })))
+        .mount(&local)
+        .await;
+
+    // Seed a uniquely-marked fallback event.
+    let marker = format!("it-marker-{}", uuid::Uuid::new_v4());
+    record_fallback(marker.clone(), 42);
+
+    let clip = ClipClient::new(ClipConfig {
+        provider: "hybrid".into(),
+        api_endpoint: String::new(),
+        api_key: String::new(),
+        model: String::new(),
+        local_base_url: local.uri(),
+        local_timeout: std::time::Duration::from_secs(2),
+    });
+    let collection = style_collection_name("local", "clip-vit-base-patch32", 512);
+    let image_search = ImageSearchService::new(
+        clip,
+        "http://127.0.0.1:16333",
+        // Hybrid-like routes: 512 writable + 1024 read-only legacy.
+        vec![
+            (512, collection, true),
+            (1024, "style_images".into(), false),
+        ],
+    );
+
+    let base = common::spawn_app(common::test_state_with(image_search).await).await;
+    let resp = common::client()
+        .get(format!("{base}/health"))
+        .send()
+        .await
+        .expect("GET /health");
+    assert_eq!(resp.status().as_u16(), 200);
+
+    let body: serde_json::Value = resp.json().await.expect("health JSON");
+    let clip_section = &body["services"]["clip"];
+    assert_eq!(clip_section["mode"], "hybrid");
+    assert_eq!(clip_section["local"]["reachable"], true);
+    assert_eq!(clip_section["local"]["model"], "clip-vit-base-patch32");
+    assert_eq!(clip_section["local"]["device"], "cpu");
+    assert_eq!(clip_section["local"]["dim"], 512);
+
+    assert_eq!(clip_section["last_fallback"]["reason"], marker);
+    assert_eq!(clip_section["last_fallback"]["elapsed_ms"], 42);
+    assert!(
+        clip_section["last_fallback"]["at"].is_string(),
+        "fallback event must carry a timestamp"
+    );
+}

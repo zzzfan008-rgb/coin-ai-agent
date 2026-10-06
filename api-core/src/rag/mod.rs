@@ -35,6 +35,7 @@ mod qdrant;
 pub use embedding::EmbeddingService;
 pub use indexer::DocumentIndexer;
 pub use parser::DocumentParser;
+pub use qdrant::is_protected_legacy;
 pub use qdrant::QdrantStore;
 pub use qdrant::RawPoint;
 
@@ -201,8 +202,10 @@ impl RagRetriever {
 
     /// Create the Qdrant collection on startup if missing.
     pub async fn ensure_collection(&self) -> Result<()> {
+        // No collection metadata for the legacy RAG collection — only
+        // T-027's new dim+model-named collections carry metadata.
         self.store
-            .ensure_collection(self.config.embedding_dim)
+            .ensure_collection(self.config.embedding_dim, None)
             .await
     }
 

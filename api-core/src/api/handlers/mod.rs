@@ -128,6 +128,14 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
         .copied()
         .unwrap_or(false);
 
+    // T-027 increment 2: CLIP provider health — current mode, local
+    // endpoint reachability (bounded probe), and the most recent fallback
+    // event. Modes without a local component skip the network probe.
+    let clip_client = state.image_search.clip();
+    let clip_mode = state.image_search.mode_str();
+    let local = clip_client.probe_local_health().await;
+    let last_fallback = crate::images::clip::last_fallback();
+
     Json(serde_json::json!({
         "status": if db_ok { "ok" } else { "degraded" },
         "version": env!("CARGO_PKG_VERSION"),
@@ -135,6 +143,24 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
             "database": if db_ok { "ok" } else { "down" },
             "llm": if default_llm { "ok" } else { "down" },
             "llm_providers": all_llm,
+            "clip": {
+                "mode": clip_mode,
+                "model": clip_client.model_name(),
+                "local": {
+                    "configured": local.configured,
+                    "reachable": local.reachable,
+                    "endpoint": local.endpoint,
+                    "model": local.model,
+                    "device": local.device,
+                    "dim": local.dim,
+                    "error": local.error,
+                },
+                "last_fallback": last_fallback.map(|event| serde_json::json!({
+                    "at": event.at,
+                    "reason": event.reason,
+                    "elapsed_ms": event.elapsed_ms,
+                })),
+            }
         }
     }))
 }
@@ -1651,8 +1677,7 @@ pub async fn upload_style_image(
     let path_clone = image_path.clone();
     tokio::spawn(async move {
         if let Err(e) = crate::images::indexer::ImageIndexer::index_image(
-            &image_search.clip(),
-            image_search.store(),
+            &image_search,
             image_id,
             &path_clone,
             Some(style_id),

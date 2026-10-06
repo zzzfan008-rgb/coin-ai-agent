@@ -338,6 +338,78 @@
 - Qdrant 集合维度元数据：`style_images` 等集合创建/读取时携带 dim/model 元数据，查询前校验维度匹配，防错配静默失败。
 - 健康监控集成：本地 CLIP `/health` 探活、不可用时告警 + 模式切换可观测（本增量只有 per-request warn 日志，无主动健康检查）。
 
+#### T-027 增量 2 实施记录（2026-10-06）
+
+范围：集合维度元数据 + 重索引 pipeline + CLIP 健康监控。未改 `CLIP_VECTOR_DIM` 语义、未动迁移文件与前端；存量集合只新增不改动。
+
+**1. 元数据方案与取舍**
+
+勘察了三种载体后采用「命名约定 + Qdrant 原生 collection metadata」双重方案：
+
+| 方案 | 判断 |
+|---|---|
+| 元数据点（集合内固定 UUID + 零向量 payload） | 否决：Cosine 空间零向量退化，且污染搜索结果，需永久 filter 排除 |
+| 仅命名约定 | 可用但元数据不经 API 可读、改名即丢失 |
+| Qdrant 1.19 原生 collection metadata | **采用**：`PUT /collections/{name}` body 顶层 `metadata`（任意 JSON），collection-info 返回在 `result.config.metadata`；权威依据 Qdrant 官方 Collections 文档与 Create Collection API 参考（"application-specific information such as creation time, migration data, inference model"）。本机 Qdrant 1.19.1 实测落地（见冒烟证据） |
+| 命名约定 | **同时保留**：作为第二道防线，不查 API 也能肉眼分辨维度，且路由按名称绑定 |
+
+集合 ensure 语义（`QdrantStore::ensure_collection(dim, metadata)`）：已存在时读 `result.config.params.vectors.size` 与期望维度比对，**漂移即报错**（不再静默返回）；新增 `verify_collection_dim`（GET-only，缺失返回 false，绝不创建）供只读路由使用。
+
+**2. 集合命名与理由**
+
+命名函数 `images::style_collection_name(provider, model, dim)` →
+`style_images_{provider}_{model-tag}_{dim}`：
+- 本地 ViT-B/32：`style_images_local_clipvitb32_512`
+- 未来 DashScope 专属集（本增量不创建）：`style_images_dashscope_mmembedv1_1024`
+- 维度放末尾 token，列表/日志按嵌入空间排序，512 集合视觉上不可能与存量混淆；模型短标对已知模型显式映射（clip-vit-base-patch32→clipvitb32、multimodal-embedding-v1→mmembedv1），未知模型退化为 ASCII 字母数字小写，保证集合名合法。
+
+各模式路由表（`ImageSearchService::from_env`）：
+- Local：512 → 新集合（可写）
+- Hybrid：512 → 新集合（可写）＋ 1024 → 存量 `style_images`（**只读**，fallback embedding 检索用，绝不创建/修改）
+- DashScope/Generic：保持存量 `style_images`（Generic 行为不变，既有部署零影响）
+
+写保护为代码级硬守卫：`QdrantStore::new_read_only` 绑定的 store 在任何 upsert/delete 前即报错、不发 HTTP；`PROTECTED_LEGACY_COLLECTIONS = [fashion_knowledge, style_images]` 白名单 + `is_protected_legacy()` 供 pipeline 入口断言。检索按**实际向量维度**路由（`route_for_dim`），512 向量在结构上不可能打到 1024 集合；无匹配维度 → fail-closed 报错。
+
+**3. 重索引 pipeline**
+
+- 库逻辑 `images::reindex.rs`（可 hermetic 测试）＋薄封装 `examples/reindex_clip.rs`（仿 clip_smoke，不进 cargo test）。
+- 用法（api-core/ 下）：
+  - `cargo run --example reindex_clip`（默认目录 ../data/images、batch=16）
+  - `cargo run --example reindex_clip -- ../data/images 16`（位置参数：目录、批大小）
+- 工具安全：CLIP_PROVIDER 未设置时强制 local；dashscope/generic 模式直接拒绝（exit 2）；目标集合名由 model+dim 派生，命中保护名单即中止；只实例化绑定新集合的一个 QdrantStore。
+- 幂等：点 ID = `stable_point_id(filename)` = UUID v5（固定命名空间 `REINDEX_NAMESPACE`，改动命名空间即破坏幂等契约，注释已标注），同文件名任何机器/次数都解析到同一 ID，upsert 替换而非追加。
+- provider 契约：每个 embedding 必须是 provider=local，否则整批中止（防止经未验证 provider 落数）。
+- 输出统计：total/succeeded/failed、dim、批次数、耗时、唯一 ID 数、跑前后 points_count。
+
+**4. 健康监控字段（GET /health，services.clip）**
+
+零新依赖（reqwest + chrono + once_cell 均既有）：
+- `mode`：当前生效模式（generic/dashscope/local/hybrid）
+- `model`：客户端模型名
+- `local`：`configured`（模式是否含本地端）、`reachable`（GET {base}/health 是否 2xx，超时 = CLIP_LOCAL_TIMEOUT_SECS）、`endpoint`、服务回报的 `model`/`device`/`dim`、`error`
+- `last_fallback`：最近一次 fallback 事件 `{at RFC3339, reason, elapsed_ms}`，无则 null。hybrid dispatch 在既有 warn! 处同时写入进程级记录（`record_fallback`/`last_fallback`，OnceCell<RwLock>）；「hybrid 无本地 URL 直走 DashScope」也记录。
+
+**5. 测试（全 hermetic：wiremock 进程内 mock；失败路径死端口 18399/16333，不碰真 :6333/:8399）**
+
+新增 22 个 lib 单测：qdrant.rs 6（元数据创建请求体断言、同 dim 无 PUT、漂移报错、verify 缺失不创建、只读 upsert 零 HTTP、保护名单）、clip.rs 4（探活可达/死端口/非本地模式跳过/记录器）、images/mod.rs 6（命名 2、512/1024 路由、只读写拒绝、未知维度 fail-closed）、reindex.rs 6（稳定 ID、3 文件全 local、复跑同 ID、非 local 拒绝、保护目标拒绝、失败收集不丢批）。集成测试 handlers_chat +2（clip 段服务在/不在两态）。
+
+全量结果：lib 93 passed（增量 1 的 71 + 22）、handlers_chat 6、handlers_mcp 2、handlers_skills 3，合计 **104 绿 0 红**。cargo fmt --check 干净。cargo build --example（clip_smoke + reindex_clip）通过。clippy 本机仍未安装，留 CI。
+
+**6. 真机冒烟证据（2026-10-06，非 cargo test）**
+
+- 重索引首跑（真 :8399 CPU + 真 :6333）：`Created Qdrant collection collection=style_images_local_clipvitb32_512 vector_dim=512`；`stats: total=82 succeeded=82 failed=0 dim=Some(512) batches=6 elapsed_ms=3767`；`point_ids: 82 unique of 82`；`points_count: before=Some(0) after=Some(82)`。
+- 元数据实测（GET collection）：`config.metadata = {created_by:"api-core reindex_clip", model:"clip-vit-base-patch32", provider:"local", task:"T-027", vector_dim:512}`，`vectors: {size:512, distance:Cosine}`。
+- 幂等复跑：`points_count: before=Some(82) after=Some(82)`，统计不变（82/82/0，6 批），无重复点。
+- 健康两态（CORE_PORT=8091 真实服务）：
+  - 服务在（8399 活）：`mode:"hybrid" local:{configured:true, reachable:true, device:"cpu", dim:512, error:null} last_fallback:null`
+  - 服务不在（CLIP_LOCAL_BASE_URL=18399；POST 触发一次 encode）：`local:{reachable:false, error:"error sending request for url (http://127.0.0.1:18399/health)"}`，`last_fallback:{at:"2026-10-06T07:50:58.894123+00:00", elapsed_ms:0, reason:"local CLIP request failed: error sending request for url (http://127.0.0.1:18399/encode/image)"}`
+- 存量对账（冒烟后）：`style_images` points_count=2、`fashion_knowledge` points_count=7，均未变；新集合 82。
+
+**遗留项**
+- Hybrid fallback 到 DashScope 时检索的是只读存量 `style_images`（1024）；全新环境若无该集合，fallback 检索降级为空结果（不报错），待 DashScope 侧专用集合决策后再补（属 T-027 最终形态决策范围）。
+- 健康探活为按需触发（GET /health 时），无后台周期探活/告警推送——当前规模足够，需要时再加。
+- DashScope recall 对照（T-026 遗留）仍等 API key。
+
 ---
 
 ### T-028: ComfyUI 服务部署 + 图片生成 Skill

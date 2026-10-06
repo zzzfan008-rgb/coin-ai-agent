@@ -1,21 +1,22 @@
 //! Image indexing pipeline — persists uploaded images and upserts CLIP
-//! vectors into the Qdrant `style_images` collection.
+//! vectors into the dim-routed Qdrant collections.
 //!
 //! ```text
 //! upload (HTTP handler)
 //!   → write bytes to uploads/style-images/{org_id}/{uuid}.{ext}  (MinIO later)
 //!   → INSERT style_images
 //!   → [spawned] ClipClient::encode_image
-//!   → QdrantStore::upsert_raw_points  collection=style_images
+//!   → ImageSearchService::publish_raw_point
+//!       routed by the embedding's actual dim to the matching collection
 //!       payload = { image_path, style_id, org_id, dept_id }
 //! ```
 
 use anyhow::Result;
 use uuid::Uuid;
 
-use crate::rag::{QdrantStore, RawPoint};
+use crate::rag::RawPoint;
 
-use super::clip::ClipClient;
+use super::ImageSearchService;
 
 /// Runs the store → encode → upsert pipeline for one image.
 pub struct ImageIndexer;
@@ -36,13 +37,16 @@ impl ImageIndexer {
         Ok(path.to_string_lossy().to_string())
     }
 
-    /// CLIP-encode the image and upsert its vector into Qdrant.
+    /// CLIP-encode the image and upsert its vector into the collection
+    /// matching the embedding's actual dim.
     ///
     /// The point id equals the `style_images.id` UUID so a re-upload of the
-    /// same row replaces rather than duplicates the vector.
+    /// same row replaces rather than duplicates the vector. When the
+    /// embedding has no writable route (e.g. a 1024 fallback vector whose
+    /// only route is the protected legacy collection) the upsert fails
+    /// closed before any HTTP request.
     pub async fn index_image(
-        clip: &ClipClient,
-        store: &QdrantStore,
+        service: &ImageSearchService,
         image_id: Uuid,
         image_path: &str,
         style_id: Option<Uuid>,
@@ -50,7 +54,7 @@ impl ImageIndexer {
         dept_id: &str,
         bytes: &[u8],
     ) -> Result<()> {
-        let embedding = clip.encode_image(bytes).await?;
+        let embedding = service.clip().encode_image(bytes).await?;
         // T-027: embed-path observability — which provider actually served
         // this image's embedding (local vs DashScope fallback).
         let provider = embedding.provider_str();
@@ -63,12 +67,12 @@ impl ImageIndexer {
             "dept_id": dept_id,
         });
 
-        store
-            .upsert_raw_points(vec![RawPoint {
+        service
+            .publish_raw_point(RawPoint {
                 id: image_id.to_string(),
                 vector: embedding.vector,
                 payload,
-            }])
+            })
             .await?;
 
         tracing::info!(
