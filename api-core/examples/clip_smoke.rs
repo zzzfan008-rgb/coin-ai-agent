@@ -18,7 +18,7 @@
 
 use std::time::Instant;
 
-use api_core::images::clip::ClipClient;
+use api_core::images::clip::{ClipClient, ClipConfig};
 
 #[tokio::main]
 async fn main() {
@@ -33,10 +33,14 @@ async fn main() {
         .expect("usage: clip_smoke <image-file-path>");
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
 
-    let client = ClipClient::from_env();
+    // Reuse the library's env→mode resolution (ClipConfig::mode()) instead
+    // of showing only the raw CLIP_PROVIDER string, which is empty when unset.
+    let config = ClipConfig::from_env();
+    let mode = config.mode();
+    let client = ClipClient::new(config);
+    let raw_provider = std::env::var("CLIP_PROVIDER").unwrap_or_default();
     println!(
-        "clip_smoke: mode={:?} model={} local_base_url set={} api_endpoint set={}",
-        std::env::var("CLIP_PROVIDER").unwrap_or_default(),
+        "clip_smoke: mode={mode:?} raw_provider={raw_provider:?} model={} local_base_url set={} api_endpoint set={}",
         client.model_name(),
         std::env::var("CLIP_LOCAL_BASE_URL").is_ok(),
         std::env::var("CLIP_API_ENDPOINT").is_ok(),

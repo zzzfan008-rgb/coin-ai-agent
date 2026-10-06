@@ -607,11 +607,13 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    // Ports 18399 / 18400 — deliberately dead ports for failure-path tests,
+    // Port 18399 is a deliberately dead local port for failure-path tests,
     // following the same convention as 15432 (DB) and 16333 (Qdrant) in
-    // tests/common/mod.rs. Never point tests at 8399: that may host a real
-    // local CLIP service on dev machines, and `cargo test` must not touch
-    // real services.
+    // tests/common/mod.rs. The DashScope side uses no fixed port at all:
+    // its success/fallback paths run against an in-process wiremock
+    // MockServer on a random ephemeral port. Never point tests at 8399:
+    // that may host a real local CLIP service on dev machines, and
+    // `cargo test` must not touch real services.
     const DEAD_LOCAL_URL: &str = "http://127.0.0.1:18399";
     const DASHSCOPE_PATH: &str =
         "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding";

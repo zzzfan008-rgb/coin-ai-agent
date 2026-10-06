@@ -315,14 +315,14 @@
 
 **维度解析规则**：`images/mod.rs::resolve_vector_dim(explicit, provider)` —— 显式 `CLIP_VECTOR_DIM` > provider 默认（dashscope/qwen=1024，其余=512）。维度元数据/双集合/重索引在增量 2。
 
-**关键 file:line**
-- `api-core/src/images/clip.rs`：`ClipMode`（Generic/DashScope/Local/Hybrid，:44）、`ClipEmbedding`+`ClipProviderId`（provider_used 元数据载体，:120/:90）、`ClipConfig`（env 读取 + mode() 映射，:180）、hybrid dispatch（`encode()`，:360）、`try_local` fallback 分类（`LocalFailure`，:400）、响应形状解析 `parse_embedding`（OpenAI/proxy/Replicate/bare-array 四形状，:520）、DashScope 解析 `parse_dashscope_embedding`（:490）。
-- `api-core/src/images/mod.rs`：`resolve_vector_dim`（:60）、`SimilarSearchOutcome`（search_similar 返回值带 `provider_used`，:45）、新维度解析测试（:155）。
-- `api-core/src/images/indexer.rs`：embed 日志带 `provider`/`vector_dim`（:70）。
-- `api-core/src/api/handlers/mod.rs`：`/internal/images/search` 响应增加 `provider_used`（:1520）。
+**关键文件与符号**（只列符号不列行号，行号易漂移，以符号名为准）
+- `api-core/src/images/clip.rs`：`ClipMode`（Generic/DashScope/Local/Hybrid）、`ClipEmbedding`+`ClipProviderId`（provider_used 元数据载体）、`ClipConfig`（env 读取 + mode() 映射）、`ClipClient`、hybrid dispatch（私有 `encode()`）、`try_local` fallback 分类（`LocalFailure`）、响应形状解析 `parse_embedding`（OpenAI/proxy/Replicate/bare-array 四形状）、DashScope 解析 `parse_dashscope_embedding`。
+- `api-core/src/images/mod.rs`：`resolve_vector_dim`、`SimilarSearchOutcome`（search_similar 返回值带 `provider_used`）、新维度解析测试。
+- `api-core/src/images/indexer.rs`：embed 日志带 `provider`/`vector_dim`。
+- `api-core/src/api/handlers/mod.rs`：`/internal/images/search` 响应增加 `provider_used`。
 - `api-core/examples/clip_smoke.rs`：实机冒烟工具（不进 cargo test；`cargo run --example clip_smoke -- <jpg>`）。
 
-**测试（api-core，wiremock 进程内 mock，零真实网络；失败路径用死端口 18399/18400，仿 15432/16333 惯例）**
+**测试（api-core，wiremock 进程内 mock，零真实网络；本地失败路径用死端口 18399，DashScope 端用 wiremock 随机端口，仿 15432/16333 惯例）**
 - clip.rs 新增 12 个：hybrid 本地成功且 DashScope 零调用（断言向量内容+512 维+provider=local）、本地不可达 fallback、本地 5xx fallback、本地形状不符 fallback、本地超时 fallback（300ms 超时 vs 3s 延迟 mock）、本地 4xx 不 fallback（dashscope 调用数=0）、dashscope 模式不碰本地（回归保护）、local 模式无 DashScope 也能跑、hybrid 空本地 URL 直接远端、Generic 模式行为不变（请求体仍 `{model,image}` 无 `input` 字段）、env→mode 映射、默认 model 随 mode。
 - mod.rs 新增 2 个：`resolve_vector_dim` provider 默认 + 显式最高优先。
 - 全量 cargo test：lib 71 passed（59 既有 + 12 新 clip + 2 新 dim）+ handlers_chat 4 + handlers_mcp 2 + handlers_skills 3 = 80 绿 0 红。
@@ -331,6 +331,7 @@
 **实机冒烟证据（2026-10-05，data/images 任取一 jpg，非 cargo test）**
 - 本地成功：`CLIP_PROVIDER=hybrid`（未设 endpoint）→ `encode OK: provider_used=local dim=512 elapsed_ms=138`，真实 8399 服务返回 512 维向量。
 - fallback：`CLIP_PROVIDER=hybrid CLIP_LOCAL_BASE_URL=http://127.0.0.1:18399 CLIP_API_ENDPOINT=http://127.0.0.1:18400`（18400 为进程内 DashScope shape mock）→ `WARN ... Local CLIP request failed — falling back to DashScope provider="dashscope" elapsed_ms=3 error=local CLIP request failed: error sending request for url (http://127.0.0.1:18399/encode/image)`，随后 `encode OK: provider_used=dashscope dim=1024`。
+    - 注：fallback 冒烟的 dashscope 路径输出来自进程内 mock（未入库）；等价行为已由 hermetic 测试 `clip::tests::hybrid_falls_back_when_local_unreachable` 等覆盖（wiremock 随机端口），复现以测试为准。
 
 **增量 2 待办（T-027 剩余交付物）**
 - 重索引 pipeline：一键把既有 style_images（512 维）迁到与本地维度一致的集合（ADR 推荐双集合共存：collection 元数据标 dim/model，新旧并存不删旧）。
