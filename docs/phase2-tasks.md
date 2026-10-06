@@ -368,7 +368,7 @@
 - Hybrid：512 → 新集合（可写）＋ 1024 → 存量 `style_images`（**只读**，fallback embedding 检索用，绝不创建/修改）
 - DashScope/Generic：保持存量 `style_images`（Generic 行为不变，既有部署零影响）
 
-写保护为代码级硬守卫：`QdrantStore::new_read_only` 绑定的 store 在任何 upsert/delete 前即报错、不发 HTTP；`PROTECTED_LEGACY_COLLECTIONS = [fashion_knowledge, style_images]` 白名单 + `is_protected_legacy()` 供 pipeline 入口断言。检索按**实际向量维度**路由（`route_for_dim`），512 向量在结构上不可能打到 1024 集合；无匹配维度 → fail-closed 报错。
+写保护的实际范围（F1 更正，2026-10-06 用户拍板 A）：**保证的是「重索引 pipeline 及其 fallback 路径不可写存量集合」**——`QdrantStore::new_read_only` 绑定的 store 在任何 upsert/delete 前即报错、不发 HTTP；`PROTECTED_LEGACY_COLLECTIONS = [fashion_knowledge, style_images]` 白名单在 pipeline 入口断言（`reindex.rs:90`、`reindex_clip.rs:87`）。**边界（如实记录）**：`QdrantStore` 的 `ensure_collection`/`upsert_raw_points`/`delete_by_document` 本身不查白名单；缺省 DashScope/Generic 模式的写路由按设计仍绑定存量 `style_images`（`mod.rs` 路由表；style 图索引即写入该集合，T-027 之前的既定行为，本轮真机对账存量 2 点无恙）。存储层硬锁与全 provider 迁移见「增量 3」卡片。检索按**实际向量维度**路由（`route_for_dim`），512 向量在结构上不可能打到 1024 集合；无匹配维度 → fail-closed 报错。
 
 **3. 重索引 pipeline**
 
@@ -409,7 +409,7 @@
 - Hybrid fallback 到 DashScope 时检索的是只读存量 `style_images`（1024）；全新环境若无该集合，fallback 检索降级为空结果（不报错），待 DashScope 侧专用集合决策后再补（属 T-027 最终形态决策范围）。
 - 健康探活为按需触发（GET /health 时），无后台周期探活/告警推送——当前规模足够，需要时再加。
 - DashScope recall 对照（T-026 遗留）仍等 API key。
-- **F1 处置（2026-10-06）**：hybrid 生产启用暂缓——缺省 provider 未开 hybrid，增量 2 双集合路由（ce24233）已合入，待上一条「DashScope 侧专用集合决策」与「全新环境降级」两项落定后再考虑放开。
+- **F1 处置（2026-10-06，用户拍板 A→C→B 序列）**：A = 保护范围措辞更正（见上方「写保护的实际范围」，已完成）；C = 全 provider 迁 dim+model 命名集合 + 白名单收窄（增量 3 卡片）；B = `QdrantStore` 写入口硬锁，C 验证通过后执行。hybrid 生产启用仍暂缓（缺省 provider 未开 hybrid），C 落地后随「DashScope 侧专用集合」遗留项一并放开评估。
 
 **reviewer 修复轮记录（2026-10-06，ce24233 门禁 finding 修复；F1 需用户裁决、F7 流程记录均不在本轮范围）**
 
@@ -420,6 +420,25 @@
 - F4：reindex「整批中止」表述补精确——run_reindex 文档注释注明「中止前已 flush 的批次为合法本地向量，stable_point_id 幂等可重跑恢复」（api-core/src/images/reindex.rs:77-80），provider 契约内联注释同注（reindex.rs:121-125）；本记录「3. 重索引 pipeline」provider 契约行已同步补注。
 
 修复轮验证：全量 cargo test = lib 95 + handlers_chat 6 + handlers_mcp 2 + handlers_skills 3，合计 **106 passed 0 failed**（增量 2 原 104，+F2/F3 两条新测试）；cargo fmt --check 干净；cargo build --examples（clip_smoke + reindex_clip）通过；存量 4 个编译 warning 与本轮改动无关。
+
+**7. 增量 3（T-027 收尾）：全 provider 迁移专用集合（C）＋ 存量保护硬锁（B）**——2026-10-06 用户拍板 A→C→B 序列，本卡实施 C，B 在 C 验证通过后作为收尾步骤。
+
+**C 阶段（本增量）**：
+1. **路由表迁移**：DashScope/Generic 写路由从 `(dim, "style_images", writable=true)` 迁至 `(dim, style_collection_name(provider, model, dim), true)`——复用增量 2 的 `style_collection_name` + 修复轮的 `collection_identity()`（F2 已保证元数据真实来源）。迁移后四种 provider 的写集合全部为 dim+model 命名，元数据与向量真实来源一致。
+2. **存量点位平移**：平移脚本（examples/ 风格，仿 `reindex_clip.rs`）把存量 `style_images` 的 1024 维点位**纯复制**到 DashScope 专用新集合（Qdrant scroll+upsert，**不需要 DashScope key**）；幂等（同点 ID 覆盖）；先建后验再停用。开发环境存量仅 2 点；真实部署同脚本执行。
+3. **过渡期检索行为**：新集合存在且非空 → 用新集合；否则回退只读存量 `style_images`（fail-safe，保持 hybrid fallback 的 1024 路由语义不变）。存量集合在删除决策前保持只读引用。
+4. **fashion_knowledge 豁免（待实施确认）**：1536 维文档 RAG 主链路，集合名来自 knowledge config，与 style 图链路职责不同——建议豁免不迁（pgvector+Qdrant 职责已定，不动生产 RAG），白名单收窄时保留其保护项。实施时核实后把结论写回本卡。
+5. **白名单收窄**：C 完成后 `PROTECTED_LEGACY_COLLECTIONS` 语义更新——新命名集合不可能命中白名单（已有测试 `generated_collection_names_are_never_protected_legacy` 钉住），白名单只剩「只读存量 + RAG 豁免项」。
+
+**B 阶段（C 验证通过后收尾，可同 PR 或独立小 PR）**：
+6. `QdrantStore` 三个写入口（`ensure_collection`/`upsert_raw_points`/`delete_by_document`）加 `is_protected_legacy` 硬校验，命中即报错不发 HTTP；此时缺省模式写路由已指向新集合，不再触发；`fashion_knowledge` 的 RAG ingestion 若豁免则豁免名单显式化（配置或常量，不靠注释）。
+
+**验收**：
+- C：四 provider 各自 ensure 目标为 dim+model 命名集合；平移后新集合 points_count 对账（= 存量点数）；检索 hermetic 回归（新集合优先/存量回退两态）；真机冒烟：generic 模式 style 图索引写入新集合、存量 `style_images` 点数不变。
+- B：hermetic 测试断言对保护名的三写入口全部报错且零 HTTP；缺省模式全链路测试绿。
+- 全程除平移脚本显式目标外，存量集合零写入。
+
+**依赖/遗留**：DashScope key（recall 对比校验用，不阻塞平移与 B）；旧 `style_images` 删除决策（另定，本卡不删）；F7 流程——backend 后续任务须先跑 impact 分析（AGENTS.md MUST；修复轮 2a20a11 已补跑）。
 
 ---
 
