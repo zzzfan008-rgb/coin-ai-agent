@@ -16,11 +16,25 @@ use serde_json::Value;
 
 use super::{QdrantChunk, QdrantSearchResult};
 
-/// Legacy collections created in the DashScope era (`fashion_knowledge`
-/// chunks, `style_images` 1024-dim points). T-027 tooling must never
-/// modify them — new pipelines carry their own dim+model-named
-/// collections, and writes against a protected name are refused in code,
-/// not merely by convention.
+/// Legacy collections from the DashScope era that T-027 tooling must
+/// protect:
+///   - `style_images` (1024-dim points): after increment 3 all four CLIP
+///     provider modes write to their own dim+model-named collection. The
+///     legacy name survives ONLY as a read-only fallback target while a
+///     mode's new collection is still missing or empty (transitional
+///     search semantics) and as the source of the one-off migration
+///     script — it is never a write target.
+///   - `fashion_knowledge`: the document-RAG main chain (collection name
+///     comes from the knowledge config). Exempted from migration: it is a
+///     separate text-RAG pipeline, not the style-image chain.
+///
+/// Dim+model-named collections structurally can never match one of these
+/// names — `style_collection_name` output is pinned by
+/// `generated_collection_names_are_never_protected_legacy`.
+///
+/// Scope note (T-027 B phase, NOT implemented yet): this list currently
+/// guards pipelines (entry assertions) and read-only routes; the three
+/// `QdrantStore` write entries do not hard-check it yet.
 pub const PROTECTED_LEGACY_COLLECTIONS: &[&str] = &["fashion_knowledge", "style_images"];
 
 /// Whether `collection` names a protected legacy collection.
@@ -33,6 +47,24 @@ pub struct RawPoint {
     pub id: String,
     pub vector: Vec<f32>,
     pub payload: Value,
+}
+
+/// One point read via the Qdrant scroll API. Unlike [`RawPoint`] the id is
+/// kept as raw JSON (UUID string OR unsigned integer) so a migration can
+/// write it back unchanged.
+#[derive(Debug, Clone)]
+pub struct ScrolledPoint {
+    pub id: Value,
+    pub vector: Vec<f32>,
+    pub payload: Value,
+}
+
+/// Result of one scroll request: the page's points plus the offset to use
+/// for the next page (`None` when this was the last page).
+#[derive(Debug)]
+pub struct ScrollPage {
+    pub points: Vec<ScrolledPoint>,
+    pub next_offset: Option<Value>,
 }
 
 /// Thin REST client for a single Qdrant collection.
@@ -161,6 +193,124 @@ impl QdrantStore {
         let info: Value = resp.json().await?;
         verify_vectors_size(&info, &self.collection, vector_dim)?;
         Ok(true)
+    }
+
+    // ── Reads used by the migration / transitional search ───────────────────
+
+    /// Read `points_count` for the bound collection via GET collection-info.
+    ///
+    /// Returns `Ok(None)` when the collection is missing, so callers can
+    /// distinguish "not there yet" from "empty" only via the server (both
+    /// lead to the same transition decision, so None and 0 are treated
+    /// identically by the search layer).
+    pub async fn points_count(&self) -> Result<Option<u64>> {
+        let info_url = format!("{}/collections/{}", self.base_url, self.collection);
+        let resp = self
+            .http
+            .get(&info_url)
+            .send()
+            .await
+            .context("Qdrant collection-info request failed")?;
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        let body: Value = resp.json().await.context("decoding collection-info")?;
+        Ok(body
+            .pointer("/result/points_count")
+            .and_then(|v| v.as_u64()))
+    }
+
+    /// Scroll one page of points (POST /collections/{name}/points/scroll)
+    /// with vectors and payloads included.
+    ///
+    /// This is a READ: it works on a read-only-bound store and never
+    /// mutates anything. `offset` is the opaque value from a previous
+    /// page's [`ScrollPage::next_offset`]; `None` starts at the beginning.
+    pub async fn scroll_points(&self, offset: Option<Value>, limit: usize) -> Result<ScrollPage> {
+        let url = format!(
+            "{}/collections/{}/points/scroll",
+            self.base_url, self.collection
+        );
+        let mut body = serde_json::json!({
+            "limit": limit,
+            "with_payload": true,
+            "with_vector": true,
+        });
+        if let Some(offset) = offset {
+            body["offset"] = offset;
+        }
+
+        let resp = self
+            .http
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .context("Qdrant scroll request failed")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            bail!("Qdrant scroll failed ({status}): {text}");
+        }
+
+        let envelope: ScrollEnvelope = resp.json().await.context("decoding scroll response")?;
+        let result = envelope.result;
+        let points = result
+            .points
+            .into_iter()
+            .map(parse_scrolled_point)
+            .collect::<Result<Vec<_>>>()?;
+        // Qdrant 1.19 names this `next_page_offset`; older versions used
+        // `next_offset`. Accept either.
+        let next_offset = result.next_page_offset.or(result.next_offset);
+
+        Ok(ScrollPage {
+            points,
+            next_offset,
+        })
+    }
+
+    /// Upsert points with original (JSON) ids — the migration copy path.
+    /// Same id replacement makes the copy idempotent.
+    pub async fn upsert_scrolled_points(&self, points: Vec<ScrolledPoint>) -> Result<()> {
+        if points.is_empty() {
+            return Ok(());
+        }
+        self.assert_writable()?;
+
+        let url = format!(
+            "{}/collections/{}/points?wait=true",
+            self.base_url, self.collection
+        );
+        let points: Vec<_> = points
+            .into_iter()
+            .map(|p| {
+                serde_json::json!({
+                    "id": p.id,
+                    "vector": p.vector,
+                    "payload": p.payload,
+                })
+            })
+            .collect();
+        let body = serde_json::json!({ "points": points });
+
+        let resp = self
+            .http
+            .put(&url)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .context("Qdrant migration upsert request failed")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            bail!("Qdrant migration upsert failed ({status}): {text}");
+        }
+        Ok(())
     }
 
     // ── Point upsert ─────────────────────────────────────────────────────────
@@ -373,6 +523,55 @@ struct QdrantEnvelope<T> {
     result: T,
 }
 
+/// Scroll envelope — fields use Qdrant 1.19 names; `next_offset` is the
+/// pre-1.19 alias, kept for compatibility.
+#[derive(Debug, Deserialize)]
+struct ScrollEnvelope {
+    result: ScrollResult,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScrollResult {
+    points: Vec<Value>,
+    #[serde(rename = "next_page_offset")]
+    next_page_offset: Option<Value>,
+    #[serde(rename = "next_offset")]
+    next_offset: Option<Value>,
+}
+
+/// Convert one raw scroll point JSON value into a [`ScrolledPoint`].
+///
+/// Qdrant returns the vector either as a bare array (single unnamed
+/// vector) or an object mapping vector names to arrays; accept both.
+fn parse_scrolled_point(point: Value) -> Result<ScrolledPoint> {
+    let id = point
+        .get("id")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("scroll point missing id: {point}"))?;
+    let vector_value = point
+        .get("vector")
+        .ok_or_else(|| anyhow::anyhow!("scroll point missing vector (with_vector must be true)"))?;
+    let vector_array = match vector_value {
+        Value::Array(array) => array,
+        Value::Object(map) => map
+            .values()
+            .next()
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| anyhow::anyhow!("named-vector scroll point has no usable vector"))?,
+        _ => anyhow::bail!("unexpected scroll vector shape: {vector_value}"),
+    };
+    let vector = vector_array
+        .iter()
+        .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+        .collect();
+    let payload = point.get("payload").cloned().unwrap_or(Value::Null);
+    Ok(ScrolledPoint {
+        id,
+        vector,
+        payload,
+    })
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -518,5 +717,138 @@ mod tests {
             0,
             "no HTTP request may leave for a refused write"
         );
+    }
+
+    // ── Migration read methods (increment 3 phase C) ─────────────────────
+
+    #[tokio::test]
+    async fn scroll_points_sends_expected_body_and_parses_page() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/collections/c1/points/scroll"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "points": [{
+                        "id": "uuid-1",
+                        "vector": [0.1, 0.2, 0.3],
+                        "payload": {"image_path": "a.jpg"},
+                    }],
+                    // Pre-1.19 offset field name.
+                    "next_offset": 7,
+                },
+                "status": "ok",
+            })))
+            .mount(&server)
+            .await;
+
+        // Scrolling is a read: a read-only-bound store may scroll.
+        let store = QdrantStore::new_read_only(&server.uri(), "c1");
+        let page = store
+            .scroll_points(Some(serde_json::json!(3)), 100)
+            .await
+            .expect("scroll");
+
+        // Request body pins the scroll contract.
+        let req = &server.received_requests().await.unwrap()[0];
+        let body: Value = serde_json::from_slice(&req.body).unwrap();
+        assert_eq!(body["limit"], 100);
+        assert_eq!(body["offset"], 3);
+        assert_eq!(body["with_payload"], true);
+        assert_eq!(body["with_vector"], true);
+
+        assert_eq!(page.points.len(), 1);
+        assert_eq!(page.points[0].id, "uuid-1");
+        assert_eq!(page.points[0].vector, vec![0.1, 0.2, 0.3]);
+        assert_eq!(page.points[0].payload["image_path"], "a.jpg");
+        assert_eq!(page.next_offset, Some(serde_json::json!(7)));
+    }
+
+    #[tokio::test]
+    async fn scroll_points_parses_1_19_named_vector_and_page_offset() {
+        // Qdrant 1.19: next_page_offset field, and a named-vector object
+        // form for the point.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/collections/c2/points/scroll"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "points": [{
+                        "id": 9,
+                        "vector": {"": [0.5, 0.6]},
+                        "payload": null,
+                    }],
+                    "next_page_offset": "token-9",
+                },
+            })))
+            .mount(&server)
+            .await;
+
+        let store = QdrantStore::new(&server.uri(), "c2");
+        let page = store.scroll_points(None, 50).await.expect("scroll");
+        assert_eq!(page.points[0].id, 9);
+        assert_eq!(page.points[0].vector, vec![0.5, 0.6]);
+        assert_eq!(page.next_offset, Some(serde_json::json!("token-9")));
+    }
+
+    #[tokio::test]
+    async fn points_count_reports_count_and_none_when_missing() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/collections/c3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {"points_count": 2},
+            })))
+            .mount(&server)
+            .await;
+
+        let store = QdrantStore::new(&server.uri(), "c3");
+        assert_eq!(store.points_count().await.unwrap(), Some(2));
+
+        // A second collection that is missing → None (no creation).
+        let missing_store = QdrantStore::new_read_only(&server.uri(), "missing");
+        assert_eq!(missing_store.points_count().await.unwrap(), None);
+        let puts = put_counter(&server).await;
+        assert_eq!(puts, 0, "points_count never creates");
+    }
+
+    #[tokio::test]
+    async fn upsert_scrolled_points_preserves_ids_and_respects_readonly() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/collections/c4/points"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {"status": "completed"},
+            })))
+            .mount(&server)
+            .await;
+
+        let store = QdrantStore::new(&server.uri(), "c4");
+        store
+            .upsert_scrolled_points(vec![ScrolledPoint {
+                id: serde_json::json!(42),
+                vector: vec![0.1; 2],
+                payload: serde_json::json!({"k": "v"}),
+            }])
+            .await
+            .expect("migration upsert");
+
+        let put = &server.received_requests().await.unwrap()[0];
+        let body: Value = serde_json::from_slice(&put.body).unwrap();
+        assert_eq!(body["points"][0]["id"], 42, "integer id preserved");
+        assert_eq!(body["points"][0]["payload"]["k"], "v");
+
+        // A read-only target store refuses before HTTP.
+        let ro_server = MockServer::start().await;
+        let ro = QdrantStore::new_read_only(&ro_server.uri(), "c4");
+        let err = ro
+            .upsert_scrolled_points(vec![ScrolledPoint {
+                id: serde_json::json!(1),
+                vector: vec![0.1],
+                payload: Value::Null,
+            }])
+            .await
+            .expect_err("read-only target refuses");
+        assert!(format!("{err:#}").contains("bound read-only"), "{err:#}");
+        assert_eq!(ro_server.received_requests().await.unwrap().len(), 0);
     }
 }

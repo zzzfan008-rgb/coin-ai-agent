@@ -1,17 +1,26 @@
 //! Images module — CLIP image encoding, indexing, and image search (T-019).
 //!
-//! Storage layout (T-027 double-collection strategy, T-026 §5 option B):
-//!   - Each embedding space gets its OWN collection whose name records
-//!     provider, model and dim, and whose collection metadata (Qdrant
-//!     1.19+) repeats those fields.
-//!   - Local CLIP ViT-B/32 → `style_images_local_clipvitb32_512`
-//!   - DashScope fallback (1024) searches the legacy `style_images`
-//!     collection read-only; it is never created or modified.
+//! Storage layout (T-027, increment 3 phase C):
+//!   - Every CLIP provider mode writes its OWN collection whose name
+//!     records provider, model and dim, and whose collection metadata
+//!     (Qdrant 1.19+) repeats those fields:
+//!       Local      → style_images_local_{model-tag}_{dim}
+//!       DashScope  → style_images_dashscope_{model-tag}_{dim}
+//!       Generic    → style_images_generic_{model-tag}_{dim}
+//!       Hybrid     → local dim named collection (writable)
+//!   - The legacy `style_images` collection (1024) is referenced ONLY
+//!     read-only: as the transitional fallback while a mode's new
+//!     collection is missing or empty, and as the source of the one-off
+//!     migration script. Hybrid's 1024 fallback route stays bound to it
+//!     for the whole transition.
+//!   - `fashion_knowledge` is a separate document-RAG chain (collection
+//!     name from knowledge config) and is exempted from migration.
 //!   - Payload: `{ image_path, style_id, org_id, dept_id }`
 //!   - Tenant isolation: `must` filter on `org_id` AND `dept_id` at search time.
 
 pub mod clip;
 pub mod indexer;
+pub mod migrate;
 pub mod reindex;
 
 use anyhow::{bail, Result};
@@ -105,6 +114,55 @@ pub fn resolve_vector_dim(explicit: Option<usize>, provider: &str) -> usize {
     }
 }
 
+/// Pure route-table construction. Each spec is
+/// `(vector_dim, collection_name, writable)`.
+///
+/// Split out from `from_env` so the table is testable without process
+/// environment variables (which race under `cargo test`).
+///
+/// Writable collections (increment 3 phase C): every mode writes a
+/// dim+model-named collection —
+///   Local   → style_images_local_{model-tag}_{dim}
+///   DashScope → style_images_dashscope_mmembedv1_{dim}
+///   Generic → style_images_generic_{model-tag}_{dim}
+/// Read-only fallback routes:
+///   - DashScope/Generic at dim 1024 additionally bind the legacy
+///     `style_images` so searches fail-safe to it while the new
+///     collection is missing or empty. The fallback is added only when
+///     dimensionally compatible: the legacy collection is 1024, and a
+///     512 vector structurally cannot search it.
+///   - Hybrid keeps the increment-2 table unchanged: 512 writable named
+///     collection plus a 1024 read-only legacy route (its DashScope
+///     fallback route stays on the legacy collection for the whole
+///     transition, per the card).
+pub fn route_specs(mode: ClipMode, model: &str, dim: usize) -> Vec<(usize, String, bool)> {
+    match mode {
+        ClipMode::Local => vec![(dim, style_collection_name("local", model, dim), true)],
+        ClipMode::Hybrid => vec![
+            (dim, style_collection_name("local", model, dim), true),
+            (1024, "style_images".into(), false),
+        ],
+        ClipMode::DashScope => {
+            let mut specs = vec![(
+                dim,
+                style_collection_name("dashscope", "multimodal-embedding-v1", dim),
+                true,
+            )];
+            if dim == 1024 {
+                specs.push((dim, "style_images".into(), false));
+            }
+            specs
+        }
+        ClipMode::Generic => {
+            let mut specs = vec![(dim, style_collection_name("generic", model, dim), true)];
+            if dim == 1024 {
+                specs.push((dim, "style_images".into(), false));
+            }
+            specs
+        }
+    }
+}
+
 impl ImageSearchService {
     /// Build from environment configuration.
     pub fn from_env() -> Self {
@@ -122,22 +180,8 @@ impl ImageSearchService {
         let clip = ClipClient::new(config);
         let model = clip.model_name();
 
-        // Route table per mode. Local/Hybrid primary traffic gets a new
-        // dim+model-named collection; hybrid additionally needs a READ-ONLY
-        // 1024 route because a DashScope fallback embedding is 1024-dim.
-        // DashScope/Generic keep using the legacy `style_images` collection
-        // so pre-T-027 deployments are untouched.
-        let specs: Vec<(usize, String, bool)> = match mode {
-            ClipMode::Local => vec![(dim, style_collection_name("local", model, dim), true)],
-            ClipMode::Hybrid => vec![
-                (dim, style_collection_name("local", model, dim), true),
-                (1024, "style_images".into(), false),
-            ],
-            ClipMode::DashScope | ClipMode::Generic => {
-                vec![(dim, "style_images".into(), true)]
-            }
-        };
-
+        // Route table per mode (pure construction in `route_specs`).
+        let specs = route_specs(mode, model, dim);
         Self::new(clip, &qdrant_url, specs)
     }
 
@@ -242,6 +286,50 @@ impl ImageSearchService {
         }
     }
 
+    /// Resolve the effective READ route for a dim, applying the
+    /// transitional fail-safe semantics (increment 3 phase C).
+    ///
+    /// A dim may have up to two routes: the primary writable
+    /// dim+model-named collection and a read-only legacy fallback:
+    ///   - named collection exists with points_count > 0 → search it;
+    ///   - named collection missing or empty → search the read-only
+    ///     legacy route when present (fail-safe);
+    ///   - a single route for the dim (e.g. Local's 512 collection, or
+    ///     Hybrid's legacy-only 1024 route) is used directly with no
+    ///     extra HTTP;
+    ///   - no route at all fails closed with the same error as
+    ///     `route_for_dim`.
+    ///
+    /// The points-count GET is the only added request (one per search on
+    /// a two-route dim); transport errors propagate rather than silently
+    /// degrading.
+    async fn resolve_read_route(&self, dim: usize) -> Result<&StyleRoute> {
+        let matching: Vec<&StyleRoute> = self.routes.iter().filter(|r| r.dim == dim).collect();
+        if matching.is_empty() {
+            bail!(
+                "no style collection route for vector dim {dim} (routes: [{}])",
+                self.routes
+                    .iter()
+                    .map(|r| format!("{}:{}", r.dim, r.collection))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        let named = matching.iter().copied().find(|r| r.writable);
+        let legacy = matching.iter().copied().find(|r| !r.writable);
+        match (named, legacy) {
+            (Some(primary), Some(fallback)) => {
+                let populated = primary.store.points_count().await?;
+                match populated {
+                    Some(count) if count > 0 => Ok(primary),
+                    _ => Ok(fallback),
+                }
+            }
+            (Some(only), None) | (None, Some(only)) => Ok(only),
+            (None, None) => unreachable!("non-empty matching set"),
+        }
+    }
+
     /// Upsert one indexed point, routed by the vector's actual dimension.
     /// A dim with no writable route (e.g. a 1024 vector against the
     /// read-only legacy collection) fails before any HTTP request.
@@ -253,8 +341,10 @@ impl ImageSearchService {
 
     /// Encode an image and run an ANN search scoped to org + dept. The
     /// query goes to the collection matching the EMBEDDING's actual dim —
-    /// a 512 vector can never reach a 1024 collection. The returned
-    /// outcome also reports which CLIP provider served the query embedding
+    /// a 512 vector can never reach a 1024 collection — with transitional
+    /// fail-safe routing (named collection preferred, read-only legacy
+    /// fallback; see `resolve_read_route`). The returned outcome also
+    /// reports which CLIP provider served the query embedding
     /// (`provider_used`), so callers can surface it in responses.
     pub async fn search_similar(
         &self,
@@ -264,7 +354,12 @@ impl ImageSearchService {
         limit: usize,
     ) -> Result<SimilarSearchOutcome> {
         let embedding = self.clip.encode_image(image_bytes).await?;
-        let route = self.route_for_dim(embedding.dimension(), false)?;
+        let route = self.resolve_read_route(embedding.dimension()).await?;
+        tracing::debug!(
+            dim = embedding.dimension(),
+            collection = %route.collection,
+            "style search collection resolved"
+        );
         let hits = route
             .store
             .search(&embedding.vector, org_id, dept_id, limit)
@@ -467,6 +562,7 @@ mod tests {
             .search_similar(b"x", "org", "dept", 5)
             .await
             .expect("1024 search");
+        assert_eq!(outcome.provider_used, ClipProviderId::Local.as_str());
 
         let seen = qdrant.received_requests().await.unwrap();
         assert_eq!(seen.len(), 1);
@@ -585,5 +681,249 @@ mod tests {
         assert_eq!(body["metadata"]["vector_dim"], 1024);
         assert_eq!(body["metadata"]["provider"], "dashscope");
         assert_eq!(body["metadata"]["model"], "multimodal-embedding-v1");
+    }
+
+    // ── Increment 3 phase C: pure route table ──────────────────────────────
+
+    const DASH_NAMED_1024: &str = "style_images_dashscope_mmembedv1_1024";
+    const GENERIC_NAMED_512: &str = "style_images_generic_clipvitb32_512";
+    const GENERIC_NAMED_1024: &str = "style_images_generic_clipvitb32_1024";
+
+    #[test]
+    fn route_specs_dashscope_targets_named_collection_with_legacy_fallback() {
+        let specs = route_specs(ClipMode::DashScope, "multimodal-embedding-v1", 1024);
+        assert_eq!(
+            specs,
+            vec![
+                (1024, DASH_NAMED_1024.into(), true),
+                (1024, LEGACY_COLLECTION.into(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn route_specs_generic_512_is_named_only() {
+        // Default generic mode (512): legacy fallback is dimensionally
+        // incompatible so it must not be bound.
+        let specs = route_specs(ClipMode::Generic, "clip-vit-base-patch32", 512);
+        assert_eq!(specs, vec![(512, GENERIC_NAMED_512.into(), true)]);
+    }
+
+    #[test]
+    fn route_specs_generic_1024_gets_legacy_fallback() {
+        // Explicit CLIP_VECTOR_DIM=1024 generic deployment.
+        let specs = route_specs(ClipMode::Generic, "clip-vit-base-patch32", 1024);
+        assert_eq!(
+            specs,
+            vec![
+                (1024, GENERIC_NAMED_1024.into(), true),
+                (1024, LEGACY_COLLECTION.into(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn route_specs_local_and_hybrid_keep_increment2_table() {
+        let local = route_specs(ClipMode::Local, "clip-vit-base-patch32", 512);
+        assert_eq!(local, vec![(512, LOCAL_COLLECTION.into(), true)]);
+        let hybrid = route_specs(ClipMode::Hybrid, "clip-vit-base-patch32", 512);
+        assert_eq!(
+            hybrid,
+            vec![
+                (512, LOCAL_COLLECTION.into(), true),
+                (1024, LEGACY_COLLECTION.into(), false),
+            ],
+            "hybrid's 1024 fallback route stays on the legacy collection"
+        );
+    }
+
+    // ── Increment 3 phase C: transitional search two states ────────────────
+
+    /// Two-route 1024 service: writable named collection + read-only
+    /// legacy fallback (DashScope/Generic 1024 table).
+    fn service_with_transition_routes(clip: ClipClient, url: &str) -> ImageSearchService {
+        ImageSearchService::new(
+            clip,
+            url,
+            vec![
+                (1024, DASH_NAMED_1024.into(), true),
+                (1024, LEGACY_COLLECTION.into(), false),
+            ],
+        )
+    }
+
+    fn collection_info_with_count(count: u64) -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "result": {"points_count": count},
+        }))
+    }
+
+    fn search_hit_response(image_path: &str) -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "result": [{
+                "id": "p1", "score": 0.91,
+                "payload": {"image_path": image_path, "style_id": null},
+            }]
+        }))
+    }
+
+    #[tokio::test]
+    async fn search_prefers_named_collection_when_nonempty() {
+        let clip_server = clip_server(1024).await;
+        let qdrant = MockServer::start().await;
+
+        // Named collection: populated and serving a hit.
+        Mock::given(method("GET"))
+            .and(path(format!("/collections/{DASH_NAMED_1024}")))
+            .respond_with(collection_info_with_count(2))
+            .mount(&qdrant)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/collections/{DASH_NAMED_1024}/points/search"
+            )))
+            .respond_with(search_hit_response("from-new.jpg"))
+            .mount(&qdrant)
+            .await;
+
+        let service =
+            service_with_transition_routes(local_client(&clip_server.uri()), &qdrant.uri());
+        let outcome = service
+            .search_similar(b"x", "org", "dept", 5)
+            .await
+            .expect("search via named collection");
+        assert_eq!(outcome.hits.len(), 1);
+        assert_eq!(outcome.hits[0].image_path, "from-new.jpg");
+
+        let seen = qdrant.received_requests().await.unwrap();
+        assert_eq!(seen.len(), 2, "points-count GET + search POST");
+        assert!(seen[0]
+            .url
+            .path()
+            .ends_with(&format!("/collections/{DASH_NAMED_1024}")));
+        assert!(
+            seen[1]
+                .url
+                .path()
+                .ends_with(&format!("/collections/{DASH_NAMED_1024}/points/search")),
+            "search must target the named collection: {}",
+            seen[1].url.path()
+        );
+        assert!(
+            seen.iter()
+                .all(|r| !r.url.path().contains("/collections/style_images/")),
+            "legacy collection must not be touched while the new one is populated"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_falls_back_to_legacy_when_named_missing() {
+        let clip_server = clip_server(1024).await;
+        let qdrant = MockServer::start().await;
+
+        // Named collection does not exist (GET 404).
+        Mock::given(method("GET"))
+            .and(path(format!("/collections/{DASH_NAMED_1024}")))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&qdrant)
+            .await;
+        // Legacy serves the hit.
+        Mock::given(method("POST"))
+            .and(path("/collections/style_images/points/search"))
+            .respond_with(search_hit_response("from-legacy.jpg"))
+            .mount(&qdrant)
+            .await;
+
+        let service =
+            service_with_transition_routes(local_client(&clip_server.uri()), &qdrant.uri());
+        let outcome = service
+            .search_similar(b"x", "org", "dept", 5)
+            .await
+            .expect("search fails-safe to legacy");
+        assert_eq!(outcome.hits[0].image_path, "from-legacy.jpg");
+
+        let seen = qdrant.received_requests().await.unwrap();
+        assert_eq!(seen.len(), 2, "points-count GET + legacy search POST");
+        assert!(
+            seen[1]
+                .url
+                .path()
+                .ends_with("/collections/style_images/points/search"),
+            "search must target the legacy fallback: {}",
+            seen[1].url.path()
+        );
+    }
+
+    #[tokio::test]
+    async fn search_falls_back_to_legacy_when_named_empty() {
+        let clip_server = clip_server(1024).await;
+        let qdrant = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path(format!("/collections/{DASH_NAMED_1024}")))
+            .respond_with(collection_info_with_count(0))
+            .mount(&qdrant)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/collections/style_images/points/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": []
+            })))
+            .mount(&qdrant)
+            .await;
+
+        let service =
+            service_with_transition_routes(local_client(&clip_server.uri()), &qdrant.uri());
+        let outcome = service
+            .search_similar(b"x", "org", "dept", 5)
+            .await
+            .expect("empty named collection → legacy route");
+
+        let seen = qdrant.received_requests().await.unwrap();
+        assert_eq!(seen.len(), 2);
+        assert!(
+            seen[1]
+                .url
+                .path()
+                .ends_with("/collections/style_images/points/search"),
+            "{}",
+            seen[1].url.path()
+        );
+        assert!(outcome.hits.is_empty());
+    }
+
+    #[tokio::test]
+    async fn publish_1024_routes_to_writable_named_collection() {
+        let qdrant = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path(format!("/collections/{DASH_NAMED_1024}/points")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {"operation_id": 0, "status": "completed"},
+                "status": "ok",
+            })))
+            .mount(&qdrant)
+            .await;
+
+        let service =
+            service_with_transition_routes(local_client("http://127.0.0.1:18399"), &qdrant.uri());
+        service
+            .publish_raw_point(RawPoint {
+                id: "p1".into(),
+                vector: vec![0.1; 1024],
+                payload: serde_json::json!({"image_path": "x.jpg"}),
+            })
+            .await
+            .expect("write into named collection");
+
+        let seen = qdrant.received_requests().await.unwrap();
+        assert_eq!(seen.len(), 1);
+        assert!(
+            seen[0]
+                .url
+                .path()
+                .ends_with("/collections/style_images_dashscope_mmembedv1_1024/points"),
+            "writes must target the named collection: {}",
+            seen[0].url.path()
+        );
     }
 }

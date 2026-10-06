@@ -427,11 +427,11 @@
 1. **路由表迁移**：DashScope/Generic 写路由从 `(dim, "style_images", writable=true)` 迁至 `(dim, style_collection_name(provider, model, dim), true)`——复用增量 2 的 `style_collection_name` + 修复轮的 `collection_identity()`（F2 已保证元数据真实来源）。迁移后四种 provider 的写集合全部为 dim+model 命名，元数据与向量真实来源一致。
 2. **存量点位平移**：平移脚本（examples/ 风格，仿 `reindex_clip.rs`）把存量 `style_images` 的 1024 维点位**纯复制**到 DashScope 专用新集合（Qdrant scroll+upsert，**不需要 DashScope key**）；幂等（同点 ID 覆盖）；先建后验再停用。开发环境存量仅 2 点；真实部署同脚本执行。
 3. **过渡期检索行为**：新集合存在且非空 → 用新集合；否则回退只读存量 `style_images`（fail-safe，保持 hybrid fallback 的 1024 路由语义不变）。存量集合在删除决策前保持只读引用。
-4. **fashion_knowledge 豁免（待实施确认）**：1536 维文档 RAG 主链路，集合名来自 knowledge config，与 style 图链路职责不同——建议豁免不迁（pgvector+Qdrant 职责已定，不动生产 RAG），白名单收窄时保留其保护项。实施时核实后把结论写回本卡。
-5. **白名单收窄**：C 完成后 `PROTECTED_LEGACY_COLLECTIONS` 语义更新——新命名集合不可能命中白名单（已有测试 `generated_collection_names_are_never_protected_legacy` 钉住），白名单只剩「只读存量 + RAG 豁免项」。
+4. **fashion_knowledge 迁移（用户拍板 2026-10-06 追加，豁免建议否决）**：1536 维文档 RAG 主链路一并迁移——RAG 写/检索路由迁到 dim+model 命名集合（provider/model 从 rag 实际 embedding 配置与代码推导，先核实 1536 向量的真实来源；已知 RagConfig embedding_dim 默认 1024 与实际 1536 不一致为既有问题，迁移时一并核实 .env/配置实际值并如实记录）；存量 7 点平移（同条 2 姿势，纯 Qdrant 复制，不需要 embedding key）；过渡期 fail-safe 同条 3（新集合存在且非空→用新，否则回退只读存量）；B 阶段硬锁对 RAG ingestion 同样生效，无豁免名单。
+5. **白名单收窄**：C 完成后 `PROTECTED_LEGACY_COLLECTIONS` 语义更新——新命名集合不可能命中白名单（已有测试 `generated_collection_names_are_never_protected_legacy` 钉住），白名单只剩「只读存量 `style_images`/`fashion_knowledge`（删除决策前的过渡引用）」，无豁免项。
 
 **B 阶段（C 验证通过后收尾，可同 PR 或独立小 PR）**：
-6. `QdrantStore` 三个写入口（`ensure_collection`/`upsert_raw_points`/`delete_by_document`）加 `is_protected_legacy` 硬校验，命中即报错不发 HTTP；此时缺省模式写路由已指向新集合，不再触发；`fashion_knowledge` 的 RAG ingestion 若豁免则豁免名单显式化（配置或常量，不靠注释）。
+6. `QdrantStore` 三个写入口（`ensure_collection`/`upsert_raw_points`/`delete_by_document`）加 `is_protected_legacy` 硬校验，命中即报错不发 HTTP；此时缺省模式写路由与 RAG ingestion 均已指向新集合，不再触发；fashion_knowledge 一并迁移（用户拍板，无豁免名单）。
 
 **验收**：
 - C：四 provider 各自 ensure 目标为 dim+model 命名集合；平移后新集合 points_count 对账（= 存量点数）；检索 hermetic 回归（新集合优先/存量回退两态）；真机冒烟：generic 模式 style 图索引写入新集合、存量 `style_images` 点数不变。
@@ -439,6 +439,100 @@
 - 全程除平移脚本显式目标外，存量集合零写入。
 
 **依赖/遗留**：DashScope key（recall 对比校验用，不阻塞平移与 B）；旧 `style_images` 删除决策（另定，本卡不删）；F7 流程——backend 后续任务须先跑 impact 分析（AGENTS.md MUST；修复轮 2a20a11 已补跑）。
+
+#### T-027 增量 3 · C 阶段实施记录（2026-10-06）
+
+范围：卡上 C 阶段 1-5 条，四 provider 写集合全部迁到 dim+model 命名集合 + 存量点平移 + 过渡期 fail-safe 检索 + fashion_knowledge 豁免核实 + 白名单语义更新。**B 阶段（QdrantStore 写入口硬锁）未实施**，留 C 验收后另派。
+
+**0. Impact 分析（F7，AGENTS.md MUST；动手前执行）**
+
+先 `node .gitnexus/run.cjs analyze --index-only .` 把落后 2 commit 的索引更新（3,566 nodes / 7,560 edges / 306 flows）。如实记录 analyze 的 truncation：450 个候选入口中 250 个未入排名、44 个流程在 maxProcesses 丢弃——流程覆盖不完整，下述结论仅覆盖被索引符号。随后 upstream impact：
+
+| 目标符号 | risk | 结果与处置 |
+|---|---|---|
+| `ImageSearchService::from_env`（mod.rs:168 起表构建） | UNKNOWN / 0 callers | 索引不可达；按规则文本搜索确认唯一生产调用 lib.rs:345。签名不变 |
+| `search_similar`（mod.rs:349） | HIGH | 3 直接（mod.rs 测试）+ 1 dropped call site → 即 handler handlers/mod.rs:1522（find_similar_images）。保留方法签名与既有单路由行为，新增逻辑只在双路由 dim 生效 |
+| `route_for_dim`（mod.rs:271） | CRITICAL | 2 直接（search_similar 已改走 resolve_read_route、publish_raw_point）+ 6 测试流程。写拒绝/未知 dim fail-closed 语义逐字保留，两态新测试钉住 |
+| `style_collection_name`（mod.rs:73）、`ensure_collection`（mod.rs:215） | LOW | 复用，不改签名 |
+
+HIGH/CRITICAL 不豁免；风险通过「签名不变 + 新增 17 个 hermetic 测试」收敛。
+
+**1. 路由表迁移（卡条 1）**
+
+新增纯函数 `route_specs(mode, model, dim) -> Vec<(dim, collection, writable)>`（mod.rs:138），`from_env` 在 mod.rs:184 调用；拆成纯函数是为了不碰进程 env 就能测表（env 在 cargo test 并行下有竞态）。迁移后各模式表：
+
+| 模式 | 写集合（writable） | 只读 fallback |
+|---|---|---|
+| Local | style_images_local_clipvitb32_512 | — |
+| DashScope | style_images_dashscope_mmembedv1_1024（mod.rs:146-150，dim 来自 resolve_vector_dim=1024） | 1024→style_images（mod.rs:151-153） |
+| Generic（默认 dim=512） | style_images_generic_clipvitb32_512（mod.rs:156-157） | **不绑** legacy：512 向量在结构上无法检索 1024 集合 |
+| Generic（显式 CLIP_VECTOR_DIM=1024） | style_images_generic_clipvitb32_1024 | 1024→style_images（mod.rs:158-160） |
+| Hybrid | style_images_local_clipvitb32_512（不变） | 1024→style_images（mod.rs:141-144）——**Hybrid 的 1024 fallback 路由过渡期仍指存量 style_images** |
+
+元数据来源沿用修复轮 F2 的 `ClipClient::collection_identity()`，ensure 路径（mod.rs:215-260）对新集合 stamped 的 provider/model 与实际模式一致，未硬编码。
+
+**2. 存量点位平移（卡条 2）**
+
+库逻辑 `migrate_points(source, target_store, target, page_size, batch_size)`（api-core/src/images/migrate.rs:55）+ CLI 封装 `api-core/examples/migrate_style_images.rs`（仿 reindex_clip 风格）。
+
+- 纯 Qdrant-to-Qdrant：源 `scroll_points`（POST points/scroll，with_vector+with_payload）→ 目标 upsert，不调用任何 embedding provider，**不需要 DashScope key**。
+- 源 store 以 `new_read_only` 绑定（example:78），对存量集合只有读；新增读方法 `QdrantStore::points_count`（qdrant.rs:206）、`scroll_points`（qdrant.rs:229）；复制写走新方法 `upsert_scrolled_points`（qdrant.rs:277），点结构 `ScrolledPoint`（qdrant.rs:56，id 保持原 JSON：UUID 或无符号整数都原样回写）。
+- 双重配置保护：目标命中 `is_protected_legacy` 即 bail（migrate.rs:62-64）；目标 store 绑定集合与声明 target 不符即 bail（migrate.rs:65-70）——存量集合只能当源、不可能当写目标。
+- 幂等：同 id upsert 为替换；真机复跑计数不变（见冒烟①）。先建后验：example 先 `ensure_collection(1024, metadata provider=dashscope/model=multimodal-embedding-v1)`（example:83-100）再复制，结束按 scrolled==copied 且目标点数 >= 源点数对账。
+
+**3. 过渡期检索行为（卡条 3）**
+
+实现放在路由解析层：`resolve_read_route(dim)`（mod.rs:306），`search_similar`（mod.rs:349-366）编码后调用它：
+
+- dim 只有单条路由（Local 512、Generic 512、Hybrid 的 1024 legacy）→ 直接用，零额外 HTTP；
+- dim 有双路由（可写命名集合 + 只读 legacy）→ GET 命名集合 points_count：`Some(>0)` 用命名集合；缺失（404→None）或 0 → 回退只读 style_images，fail-safe；
+- 无任何路由 → fail-closed，报错文本与 route_for_dim 逐字一致（mod.rs:308-315）。
+- 另加 `tracing::debug!` 记录最终检索集合（mod.rs:357-361）。写路径不受影响：publish_raw_point（mod.rs:336）仍走 route_for_dim 只选 writable。
+
+**4. fashion_knowledge 豁免核实（卡条 4）——结论：豁免，不迁**
+
+依据（grep 核实）：
+- 集合名来自 knowledge config：`RagConfig::default` 的 `QDRANT_COLLECTION` 缺省 fashion_knowledge（rag/mod.rs:102-103）；`from_app_config` 直接硬绑 fashion_knowledge（rag/mod.rs:140）。
+- 它是**文档 RAG 主链路**：上传→index_document（rag/indexer.rs:34）parse→chunk→文本 embedding（rag/embedding.rs，text-embedding 系）→`upsert_chunks`，状态回写 knowledge_documents；检索走 `RagRetriever::retrieve`（rag/mod.rs:237-260）。
+- 与 style 图链路（ImageSearchService，图片 multimodal 向量，集合名由 CLIP provider/model/dim 派生）职责、载体、维度均不同。真机实测该集合为 **1536 维**（服务启动日志：`fashion_knowledge vector-dim drift: collection has 1536, expected 1024`——RagConfig 默认 1024 与真实集合不一致是既有问题，本轮不修、仅记录），points_count=7。
+- 处置：豁免迁移，白名单保留其保护项；不删不改建。
+
+**5. 白名单语义更新（卡条 5）**
+
+只动注释/文档，不动任何写入口逻辑：
+- `PROTECTED_LEGACY_COLLECTIONS`（qdrant.rs:38，值不变）的文档（qdrant.rs:19-37）改为明确：白名单只剩两类——(a) 过渡期被只读引用的 style_images（+ 平移脚本的源），(b) RAG 豁免项 fashion_knowledge；并注明 B 阶段硬锁尚未实施。
+- 新命名集合结构上不可能命中白名单：`style_collection_name` 输出以 `style_images_` 前缀 + provider/model/dim token，白名单两项为无前缀裸名；既有测试 `generated_collection_names_are_never_protected_legacy`（mod.rs:444）已钉死。
+- **未动 QdrantStore 三个写入口**：ensure_collection（qdrant.rs:135）、upsert_raw_points（qdrant.rs:364）、delete_by_document（qdrant.rs:466）均不加 is_protected_legacy 校验——那是 B 阶段。
+
+**6. 测试（全 hermetic：wiremock 进程内 mock；失败路径死端口 18399/16333，零真实 :6333/:8399）**
+
+新增 17 个：
+- images/mod.rs +8：纯表 4（dashscope 命名+legacy、generic 512 仅命名、generic 1024 带 fallback、local/hybrid 表不变）＋过渡两态 4（非空优先、缺失回退、空集合回退、1024 写指向可写命名集合；见 mod.rs:686-928）。
+- rag/qdrant.rs +4：scroll 请求体+pre-1.19 next_offset 解析、1.19 next_page_offset+命名字向量、points_count 两态、迁移 upsert 保 id+只读拒绝（qdrant.rs:725-854）。
+- images/migrate.rs +5：单页全复制（断言 PUT 体 id/vector/payload 原样、源只见读请求）、双页分页+offset 透传、protected 目标拒绝（零 HTTP）、store 绑定不符拒绝、复跑幂等（migrate.rs:223-374）。
+
+全量 `cargo test`：**lib 112 passed（增量 2 的 95 +17）、handlers_chat 6、handlers_mcp 2、handlers_skills 3，合计 123 passed 0 failed**。`cargo fmt --check` 干净。`cargo build --examples`（clip_smoke + reindex_clip + migrate_style_images）通过。clippy 本机未安装，留 CI。存量 4 个编译 warning 与本轮无关。
+
+**7. 真机冒烟证据（2026-10-06，非 cargo test）**
+
+冒烟后全量对账：
+
+| 集合 | 冒烟前 | 冒烟后 |
+|---|---|---|
+| style_images（存量） | 2 | **2（全程未变）** |
+| style_images_dashscope_mmembedv1_1024（新） | 不存在 | **2** |
+| style_images_generic_clipvitb32_512（新） | 不存在 | **1** |
+| style_images_local_clipvitb32_512 | 82 | 82 |
+| fashion_knowledge | 7 | 7 |
+
+① 平移脚本对真 :6333：`Created Qdrant collection collection=style_images_dashscope_mmembedv1_1024 vector_dim=1024`；`stats: scrolled=2 copied=2 batches=1 elapsed_ms=31`；`target points_count: before=Some(0) after=Some(2)`；源仍 2。独立对账：源/目标 id 集合一致（275348ec-…、cf8dc516-…），带向量 scroll 后 vector/payload 逐字节 diff 全等（VECTORS_IDENTICAL / PAYLOADS_IDENTICAL）；幂等复跑 2→2 无 Created、无重复。
+② Generic 真实服务（CORE_PORT=8091，CLIP_API_ENDPOINT=本地 8399 Generic 方言）：启动即建 `Created Qdrant collection collection=style_images_generic_clipvitb32_512 vector_dim=512`；POST /api/styles/693f8879…/images 上传一张 jpg 后日志 `Image indexed in Qdrant image_id=94f02e4e-… provider="generic" vector_dim=512`；generic 集合 0→1、存量 style_images 仍 2（点 id 落位已 scroll 核实）。注：本机 .env 无 LLM key，启动以 MINIMAX_API_KEY=boot-dummy 通过 LlmClient fail-fast（LLM health FAILED，与图链路无关；聊天功能本轮不验）。
+③ 检索优先路径：同图 POST /internal/images/similar → `provider_used="generic"`，命中点 image_path=uploads/style-images/…/94f02e4e-….jpg——该 id 只存在于 generic 命名集合（存量两 id 为 275348ec/cf8dc516），由数据本身证明检索走了新集合；存量仍 2。
+
+**遗留 / 下一步**
+- **B 阶段未实施**：三写入口硬锁（qdrant.rs:135/364/466）待本 C 阶段验收后另派。
+- 旧 style_images 删除决策另定（本卡不删）；DashScope recall 对比仍等 key。
+- 真机发现的既有不一致：RagConfig embedding_dim 默认 1024 vs fashion_knowledge 实际 1536（仅记录，未修）。
 
 ---
 
