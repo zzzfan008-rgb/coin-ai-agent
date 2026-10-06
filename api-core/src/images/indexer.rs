@@ -50,7 +50,11 @@ impl ImageIndexer {
         dept_id: &str,
         bytes: &[u8],
     ) -> Result<()> {
-        let vector = clip.encode_image(bytes).await?;
+        let embedding = clip.encode_image(bytes).await?;
+        // T-027: embed-path observability — which provider actually served
+        // this image's embedding (local vs DashScope fallback).
+        let provider = embedding.provider_str();
+        let vector_dim = embedding.dimension();
 
         let payload = serde_json::json!({
             "image_path": image_path,
@@ -62,12 +66,18 @@ impl ImageIndexer {
         store
             .upsert_raw_points(vec![RawPoint {
                 id: image_id.to_string(),
-                vector,
+                vector: embedding.vector,
                 payload,
             }])
             .await?;
 
-        tracing::info!(%image_id, style_id = ?style_id, "Image indexed in Qdrant");
+        tracing::info!(
+            %image_id,
+            style_id = ?style_id,
+            provider,
+            vector_dim,
+            "Image indexed in Qdrant"
+        );
         Ok(())
     }
 }

@@ -1486,11 +1486,12 @@ pub async fn find_similar_images(
     parse_uuid("dept_id", &dept_id_raw)?;
     let top_k = top_k.clamp(1, 50);
 
-    let hits = state
+    let outcome = state
         .image_search
         .search_similar(&image_bytes, &org_id_raw, &dept_id_raw, top_k)
         .await
         .map_err(|e| crate::error::AppError::LlmError(e.to_string()))?;
+    let hits = outcome.hits;
 
     // Enrich with style names in one query.
     let style_ids: Vec<Uuid> = hits
@@ -1524,7 +1525,12 @@ pub async fn find_similar_images(
         })
         .collect();
 
-    Ok(Json(serde_json::json!({ "results": results })))
+    // T-027: query-path observability — report which CLIP provider served
+    // the query embedding (local vs DashScope fallback).
+    Ok(Json(serde_json::json!({
+        "results": results,
+        "provider_used": outcome.provider_used,
+    })))
 }
 
 // ── POST /api/styles/:id/images ──────────────────────────────────────────────

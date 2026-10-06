@@ -23,6 +23,16 @@ pub struct ImageHit {
     pub score: f32,
 }
 
+/// Outcome of `search_similar`: hits plus which CLIP provider actually
+/// served the query embedding (T-027 observability; surfaced to callers as
+/// `provider_used`).
+#[derive(Debug, Clone)]
+pub struct SimilarSearchOutcome {
+    pub hits: Vec<ImageHit>,
+    /// Wire name from `clip::ClipProviderId::as_str()`.
+    pub provider_used: String,
+}
+
 /// High-level service composing the CLIP client and the Qdrant store.
 #[derive(Clone)]
 pub struct ImageSearchService {
@@ -31,15 +41,35 @@ pub struct ImageSearchService {
     vector_dim: usize,
 }
 
+/// Resolve the `style_images` collection vector dim at startup.
+///
+/// Priority (T-027): an explicit `CLIP_VECTOR_DIM` env value always wins —
+/// existing deployments that set it in `.env` behave exactly as before.
+/// Without it the dim follows the configured provider:
+///   - DashScope `multimodal-embedding-v1` emits 1024 dims (the pre-T-027
+///     default of 512 was wrong for it — the config pitfall this fixes);
+///   - local CLIP ViT-B/32, Generic, and Hybrid (local is primary) are 512.
+pub fn resolve_vector_dim(explicit: Option<usize>, provider: &str) -> usize {
+    if let Some(d) = explicit {
+        return d;
+    }
+    match provider {
+        "dashscope" | "qwen" => 1024,
+        _ => 512,
+    }
+}
+
 impl ImageSearchService {
     /// Build from environment configuration.
     pub fn from_env() -> Self {
         let qdrant_url =
             std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6333".into());
-        let vector_dim = std::env::var("CLIP_VECTOR_DIM")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(512); // CLIP ViT-B/32 → 512; ViT-L → 768
+        let vector_dim = resolve_vector_dim(
+            std::env::var("CLIP_VECTOR_DIM")
+                .ok()
+                .and_then(|v| v.parse().ok()),
+            &std::env::var("CLIP_PROVIDER").unwrap_or_default(),
+        );
 
         Self {
             clip: ClipClient::from_env(),
@@ -73,16 +103,21 @@ impl ImageSearchService {
         self.clip.model_name()
     }
 
-    /// Encode an image and run an ANN search scoped to org + dept.
+    /// Encode an image and run an ANN search scoped to org + dept. The
+    /// returned outcome also reports which CLIP provider served the query
+    /// embedding (`provider_used`), so callers can surface it in responses.
     pub async fn search_similar(
         &self,
         image_bytes: &[u8],
         org_id: &str,
         dept_id: &str,
         limit: usize,
-    ) -> Result<Vec<ImageHit>> {
-        let vector = self.clip.encode_image(image_bytes).await?;
-        let hits = self.store.search(&vector, org_id, dept_id, limit).await?;
+    ) -> Result<SimilarSearchOutcome> {
+        let embedding = self.clip.encode_image(image_bytes).await?;
+        let hits = self
+            .store
+            .search(&embedding.vector, org_id, dept_id, limit)
+            .await?;
 
         let results = hits
             .into_iter()
@@ -103,9 +138,42 @@ impl ImageSearchService {
             })
             .collect();
 
-        Ok(results)
+        Ok(SimilarSearchOutcome {
+            hits: results,
+            provider_used: embedding.provider_str().to_string(),
+        })
     }
 }
 
 /// Convenience re-export for handler call sites.
 pub type StyleId = Option<Uuid>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_vector_dim_follows_provider() {
+        // Local CLIP ViT-B/32 → 512.
+        assert_eq!(resolve_vector_dim(None, ""), 512);
+        assert_eq!(resolve_vector_dim(None, "generic"), 512);
+        assert_eq!(resolve_vector_dim(None, "local"), 512);
+        // Hybrid: local is the primary provider → 512.
+        assert_eq!(resolve_vector_dim(None, "hybrid"), 512);
+        // DashScope multimodal-embedding-v1 → 1024 (the corrected default).
+        assert_eq!(resolve_vector_dim(None, "dashscope"), 1024);
+        assert_eq!(resolve_vector_dim(None, "qwen"), 1024);
+        // Unknown values keep the pre-T-027 512 behaviour.
+        assert_eq!(resolve_vector_dim(None, "some-future-provider"), 512);
+    }
+
+    #[test]
+    fn explicit_vector_dim_always_wins() {
+        // Highest priority: explicit CLIP_VECTOR_DIM overrides every
+        // provider default, including DashScope's 1024.
+        assert_eq!(resolve_vector_dim(Some(768), "dashscope"), 768);
+        assert_eq!(resolve_vector_dim(Some(512), "dashscope"), 512);
+        assert_eq!(resolve_vector_dim(Some(1024), "local"), 1024);
+        assert_eq!(resolve_vector_dim(Some(42), "hybrid"), 42);
+    }
+}
