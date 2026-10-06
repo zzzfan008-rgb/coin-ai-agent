@@ -378,7 +378,7 @@
   - `cargo run --example reindex_clip -- ../data/images 16`（位置参数：目录、批大小）
 - 工具安全：CLIP_PROVIDER 未设置时强制 local；dashscope/generic 模式直接拒绝（exit 2）；目标集合名由 model+dim 派生，命中保护名单即中止；只实例化绑定新集合的一个 QdrantStore。
 - 幂等：点 ID = `stable_point_id(filename)` = UUID v5（固定命名空间 `REINDEX_NAMESPACE`，改动命名空间即破坏幂等契约，注释已标注），同文件名任何机器/次数都解析到同一 ID，upsert 替换而非追加。
-- provider 契约：每个 embedding 必须是 provider=local，否则整批中止（防止经未验证 provider 落数）。
+- provider 契约：每个 embedding 必须是 provider=local，否则整批中止（防止经未验证 provider 落数）；中止前已 flush 的批次为合法本地向量，stable_point_id 幂等可重跑恢复（F4）。
 - 输出统计：total/succeeded/failed、dim、批次数、耗时、唯一 ID 数、跑前后 points_count。
 
 **4. 健康监控字段（GET /health，services.clip）**
@@ -410,6 +410,16 @@
 - 健康探活为按需触发（GET /health 时），无后台周期探活/告警推送——当前规模足够，需要时再加。
 - DashScope recall 对照（T-026 遗留）仍等 API key。
 - **F1 处置（2026-10-06）**：hybrid 生产启用暂缓——缺省 provider 未开 hybrid，增量 2 双集合路由（ce24233）已合入，待上一条「DashScope 侧专用集合决策」与「全新环境降级」两项落定后再考虑放开。
+
+**reviewer 修复轮记录（2026-10-06，ce24233 门禁 finding 修复；F1 需用户裁决、F7 流程记录均不在本轮范围）**
+
+- F2：ensure_collection 元数据改为从实际生效模式推导——新增 `ClipClient::collection_identity()`（api-core/src/images/clip.rs:332：DashScope→dashscope/multimodal-embedding-v1，Generic→generic/客户端实际 model，Local/Hybrid→local/客户端实际 model），ensure_collection 调用点 api-core/src/images/mod.rs:177 不再硬编码 `"provider":"local"`；新增 hermetic 测试 api-core/src/images/mod.rs:540（GET 404→PUT）断言 DashScope 模式写入请求体 metadata.provider="dashscope"、model="multimodal-embedding-v1"、vector_dim=1024。
+- F3：探活走独立短超时——新增 `PROBE_TIMEOUT=1s`（api-core/src/images/clip.rs:175），probe_local_health 的 GET /health 改用该超时（api-core/src/images/clip.rs:376），encode 路径 local_timeout 语义不变；新增测试 api-core/src/images/clip.rs:1296（/health 延迟 3s，local_timeout 保持 5s，断言探活在 2.5s 内返回 reachable=false）。
+- F5：健康面模型字段按来源改名（api-core/src/api/handlers/mod.rs）——顶层 clip.model → `collection_model`（handlers/mod.rs:153，客户端实际模型=集合命名来源），local.model → `local_model_reported`（handlers/mod.rs:158，本地服务 /health 自报值），零新依赖；集成测试 handlers_chat.rs 两态断言已适配并同时钉住两个字段。
+- F6：消除 LAST_FALLBACK 跨测试竞态——新增 dev-dependency serial_test 3.5.0（Cargo.toml；cargo fetch 仅新增 serial_test + serial_test_derive 两包），clip.rs:794 `use serial_test::serial`；5 个 hybrid fallback 测试（clip.rs:1022/1037/1059/1081/1223）与记录器测试（clip.rs:1327）全部 `#[serial]` 同键串行化，record→read 不会再被并发测试覆写；`cargo test --lib images::clip` 连跑 3 次均 29 passed 0 failed。
+- F4：reindex「整批中止」表述补精确——run_reindex 文档注释注明「中止前已 flush 的批次为合法本地向量，stable_point_id 幂等可重跑恢复」（api-core/src/images/reindex.rs:77-80），provider 契约内联注释同注（reindex.rs:121-125）；本记录「3. 重索引 pipeline」provider 契约行已同步补注。
+
+修复轮验证：全量 cargo test = lib 95 + handlers_chat 6 + handlers_mcp 2 + handlers_skills 3，合计 **106 passed 0 failed**（增量 2 原 104，+F2/F3 两条新测试）；cargo fmt --check 干净；cargo build --examples（clip_smoke + reindex_clip）通过；存量 4 个编译 warning 与本轮改动无关。
 
 ---
 

@@ -145,12 +145,17 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
             "llm_providers": all_llm,
             "clip": {
                 "mode": clip_mode,
-                "model": clip_client.model_name(),
+                // F5: the two model fields are different sources — name
+                // them explicitly. `collection_model` is the client's
+                // effective model used for collection naming; the local
+                // block's `local_model_reported` is whatever the local
+                // service's own /health returns.
+                "collection_model": clip_client.model_name(),
                 "local": {
                     "configured": local.configured,
                     "reachable": local.reachable,
                     "endpoint": local.endpoint,
-                    "model": local.model,
+                    "local_model_reported": local.model,
                     "device": local.device,
                     "dim": local.dim,
                     "error": local.error,

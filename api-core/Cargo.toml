@@ -62,3 +62,4 @@ strip = true
 
 [dev-dependencies]
 wiremock = "0.5"
+serial_test = "3"

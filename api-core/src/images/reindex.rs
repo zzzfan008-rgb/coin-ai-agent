@@ -74,6 +74,10 @@ pub fn stable_point_id(source_name: &str) -> Uuid {
 /// Aborts (`Err`) on configuration-level violations:
 ///   - target collection is a protected legacy name;
 ///   - any embedding came from a non-local provider.
+/// Batches already flushed before an abort are legitimate local vectors
+/// (every flushed point was provider=local-verified): `stable_point_id`
+/// is deterministic, so the run is idempotently resumable/recoverable
+/// by re-running it (F4).
 /// Per-file encode failures are collected into `stats.failures` and the
 /// run completes so one bad file does not lose the batch.
 pub async fn run_reindex(
@@ -116,7 +120,9 @@ pub async fn run_reindex(
 
         // Hard provider contract: the reindex set must be embedded
         // locally. A fallback-served embedding (provider != local) aborts
-        // the run so data never lands via an unverified provider.
+        // the run so data never lands via an unverified provider. Any
+        // batches flushed before the abort are legitimate local vectors;
+        // stable_point_id makes a rerun an idempotent recovery (F4).
         if embedding.provider != ClipProviderId::Local {
             bail!(
                 "reindex refused: '{name}' was embedded by provider '{}', expected local — aborting",

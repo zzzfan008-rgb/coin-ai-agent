@@ -168,6 +168,12 @@ pub fn last_fallback() -> Option<FallbackSnapshot> {
 
 // ── Local endpoint health probe ─────────────────────────────────────────────
 
+/// Dedicated short timeout for the liveness probe: a `/health` call must
+/// never block a health endpoint for the full encode timeout (default
+/// 5s). Encode paths keep using the configured `local_timeout` — this
+/// constant applies to probing only (F3).
+const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// Result of probing the local CLIP service's `/health` endpoint.
 #[derive(Debug, Clone)]
 pub struct LocalHealth {
@@ -313,9 +319,31 @@ impl ClipClient {
         &self.local_base_url
     }
 
+    /// `(provider, model)` identity for collection metadata, derived from
+    /// the effective mode — the metadata must name exactly the provider
+    /// the mode actually encodes through:
+    ///   - DashScope    → `dashscope` / `multimodal-embedding-v1`;
+    ///   - Generic      → `generic` / the client's effective model;
+    ///   - Local/Hybrid → `local` / the client's effective (local CLIP)
+    ///                    model.
+    /// Never hardcode a provider here for routes that create collections
+    /// in non-local modes (fresh-env creation would otherwise label a
+    /// DashScope/Generic 1024 collection as provider=local).
+    pub fn collection_identity(&self) -> (&'static str, &str) {
+        match self.mode {
+            ClipMode::DashScope => (
+                ClipProviderId::DashScope.as_str(),
+                "multimodal-embedding-v1",
+            ),
+            ClipMode::Generic => (ClipProviderId::Generic.as_str(), &self.model),
+            ClipMode::Local | ClipMode::Hybrid => (ClipProviderId::Local.as_str(), &self.model),
+        }
+    }
+
     /// Probe the local CLIP service's `/health` endpoint. Modes without a
     /// local component return a `configured: false` result without any
-    /// network call. The probe timeout is the configured
+    /// network call. The probe uses a dedicated short timeout
+    /// (`PROBE_TIMEOUT`); encode requests keep the configured
     /// `CLIP_LOCAL_TIMEOUT_SECS`.
     pub async fn probe_local_health(&self) -> LocalHealth {
         let uses_local = matches!(self.mode, ClipMode::Local | ClipMode::Hybrid);
@@ -343,7 +371,9 @@ impl ClipClient {
         }
 
         let url = format!("{}/health", self.local_base_url.trim_end_matches('/'));
-        let response = self.http.get(&url).timeout(self.local_timeout).send().await;
+        // Dedicated 1s probe timeout (F3) — independent of the encode
+        // path's `local_timeout`, so GET /health cannot block 5s.
+        let response = self.http.get(&url).timeout(PROBE_TIMEOUT).send().await;
 
         match response {
             Ok(resp) if resp.status().is_success() => {
@@ -761,6 +791,7 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    use serial_test::serial;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -988,6 +1019,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn hybrid_falls_back_when_local_unreachable() {
         let dashscope = dashscope_server(1024).await;
         let client = ClipClient::new(test_config("hybrid", DEAD_LOCAL_URL, &dashscope.uri()));
@@ -1002,6 +1034,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn hybrid_falls_back_on_local_5xx() {
         let local = MockServer::start().await;
         Mock::given(method("POST"))
@@ -1023,6 +1056,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn hybrid_falls_back_on_local_bad_shape() {
         let local = MockServer::start().await;
         Mock::given(method("POST"))
@@ -1044,6 +1078,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn hybrid_falls_back_on_local_timeout() {
         let local = MockServer::start().await;
         Mock::given(method("POST"))
@@ -1185,6 +1220,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn hybrid_skips_local_when_no_local_url_is_configured() {
         let dashscope = dashscope_server(1024).await;
         let client = ClipClient::new(test_config("hybrid", "", &dashscope.uri()));
@@ -1256,7 +1292,39 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn local_health_probe_uses_short_timeout() {
+        // F3: a /health that never answers in time must fail the probe at
+        // the dedicated 1s probe timeout, even though the encode path's
+        // local_timeout is 5s — GET /health must not block 5s.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"model": "x"}))
+                    .set_delay(Duration::from_secs(3)),
+            )
+            .mount(&server)
+            .await;
+
+        let client = ClipClient::new(test_config("local", &server.uri(), ""));
+
+        let started = std::time::Instant::now();
+        let health = client.probe_local_health().await;
+        let elapsed = started.elapsed();
+
+        assert!(health.configured);
+        assert!(!health.reachable);
+        assert!(health.error.is_some());
+        assert!(
+            elapsed < Duration::from_millis(2500),
+            "probe must use the dedicated 1s timeout, took {elapsed:?}"
+        );
+    }
+
     #[test]
+    #[serial]
     fn fallback_recorder_reports_last_event() {
         // Global state: tolerate anything previously recorded; assert only
         // that our own marked event is retrievable intact.

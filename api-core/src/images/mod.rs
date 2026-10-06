@@ -171,10 +171,14 @@ impl ImageSearchService {
     pub async fn ensure_collection(&self) -> Result<()> {
         for route in &self.routes {
             if route.writable {
+                // Metadata identity is derived from the mode actually in
+                // effect, never hardcoded: DashScope routes must not be
+                // stamped provider=local (F2).
+                let (provider, metadata_model) = self.clip.collection_identity();
                 let metadata = serde_json::json!({
                     "vector_dim": route.dim,
-                    "model": self.clip.model_name(),
-                    "provider": "local",
+                    "model": metadata_model,
+                    "provider": provider,
                     "created_by": "api-core",
                     "task": "T-027",
                 });
@@ -530,5 +534,56 @@ mod tests {
             "{err:#}"
         );
         assert_eq!(qdrant.received_requests().await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn ensure_collection_metadata_provider_follows_dashscope_mode() {
+        // F2: in DashScope mode a fresh-env creation (GET 404 → PUT) must
+        // stamp the collection metadata with the actually-effective
+        // provider, never the hardcoded "local".
+        let qdrant = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/collections/style_images"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&qdrant)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/collections/style_images"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": true, "status": "ok",
+            })))
+            .mount(&qdrant)
+            .await;
+
+        let clip = ClipClient::new(ClipConfig {
+            provider: "dashscope".into(),
+            api_endpoint: "http://127.0.0.1:9".into(),
+            api_key: String::new(),
+            model: String::new(),
+            local_base_url: String::new(),
+            local_timeout: Duration::from_secs(5),
+        });
+        let service = ImageSearchService::new(
+            clip,
+            &qdrant.uri(),
+            vec![(1024, "style_images".into(), true)],
+        );
+        service
+            .ensure_collection()
+            .await
+            .expect("ensure in dashscope mode");
+
+        let put = qdrant
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.method.to_string() == "PUT")
+            .expect("a PUT create request must be sent");
+        let body: serde_json::Value = serde_json::from_slice(&put.body).unwrap();
+        assert_eq!(body["vectors"]["size"], 1024);
+        assert_eq!(body["metadata"]["vector_dim"], 1024);
+        assert_eq!(body["metadata"]["provider"], "dashscope");
+        assert_eq!(body["metadata"]["model"], "multimodal-embedding-v1");
     }
 }

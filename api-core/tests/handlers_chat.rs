@@ -142,7 +142,7 @@ async fn health_reports_clip_section_with_local_down() {
     let body: serde_json::Value = resp.json().await.expect("health JSON");
     let clip = &body["services"]["clip"];
     assert_eq!(clip["mode"], "local");
-    assert_eq!(clip["model"], "clip-vit-base-patch32");
+    assert_eq!(clip["collection_model"], "clip-vit-base-patch32");
     assert_eq!(clip["local"]["configured"], true);
     assert_eq!(clip["local"]["reachable"], false);
     assert_eq!(clip["local"]["endpoint"], "http://127.0.0.1:18399");
@@ -207,8 +207,14 @@ async fn health_reports_clip_local_up_and_last_fallback() {
     let body: serde_json::Value = resp.json().await.expect("health JSON");
     let clip_section = &body["services"]["clip"];
     assert_eq!(clip_section["mode"], "hybrid");
+    // F5: the client/collection model vs the model the local service
+    // itself reports are different sources — both are exposed.
+    assert_eq!(clip_section["collection_model"], "clip-vit-base-patch32");
     assert_eq!(clip_section["local"]["reachable"], true);
-    assert_eq!(clip_section["local"]["model"], "clip-vit-base-patch32");
+    assert_eq!(
+        clip_section["local"]["local_model_reported"],
+        "clip-vit-base-patch32"
+    );
     assert_eq!(clip_section["local"]["device"], "cpu");
     assert_eq!(clip_section["local"]["dim"], 512);
 
