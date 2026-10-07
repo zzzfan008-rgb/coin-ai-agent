@@ -536,6 +536,92 @@ HIGH/CRITICAL 不豁免；风险通过「签名不变 + 新增 17 个 hermetic �
 
 ---
 
+#### T-027 增量 3 · C 阶段追加轮：fashion_knowledge 迁移（2026-10-06）
+
+用户拍板：**fashion_knowledge 豁免否决，一并迁移**（卡条 4 已据此改写）。本节为追加轮记录，上一轮「豁免，不迁」结论作废、保留为历史。范围仅 RAG 链路；style 链路已迁代码未动。**B 阶段仍未实施。**
+
+**0. 事实核实：1536 向量的真实来源（结论如实记录）**
+
+- 存量集合 fashion_knowledge：7 点，向量逐点实测 1536 维（带向量 scroll 计数 1535 逗号）；集合 config params size=1536，无 collection metadata。
+- 现存 7 点的写入时点：点 payload 的 4 个 doc_id 与 DB knowledge_documents 中 **2026-10-02 16:14 批次**完全对应（f041afce fabric 1、80e60320 tech 2、f371fb2e washing 2、d74654ac color 2，共 7 chunks；09-23 批次 7 chunks 已不在集合中）。
+- 当时代码（HEAD d2d4263，ce291dc 恢复提交在 16:59 才落地）RagConfig 实际生效值：model=text-embedding-v3、base=https://maas.qianwenaiapi.com/compatible-mode/v1、embedding_dim=1024（EMBEDDING_DIM 未设，.env 无任何 EMBEDDING_* 键，shell history 亦无覆盖痕迹）；EmbeddingService 请求体因此带 model=text-embedding-v3 与 dimensions=1024（rag/embedding.rs:55-61）。
+- **结论**：实际落库 1536 而请求 dimensions=1024 → 该 qwen 兼容代理（maas.qianwenaiapi.com）未按请求维度返回、实际输出 1536 向量（代理侧行为；无法完全排除摄入时 shell env 注入，但无任何证据支持）。
+- 配置默认值演进：30545cb（2026-09-21 23:17 接入 DashScope）之前代码硬编码 model=deepseek-embedding、dim 1536、base=https://api.deepseek.com/v1——集合本体（1536）应源于该时期；30545cb 之后默认 dim 1024，与现存集合形成 drift（启动 ensure 持续报 drift，即上一轮记录的现象）。
+- 当前 .env 生效面：EMBEDDING_API_KEY/EMBEDDING_DIM 均未设置；from_app_config 的 key 回退链（EMBEDDING_API_KEY→DASHSCOPE_API_KEY→config.qwen_api_key）在当前 .env 下为空——即按当前 .env 新摄入不可用；10-02 的摄入依赖当时 shell 注入的 key。
+- 配置建议（不做代码强制）：生产应显式设 EMBEDDING_DIM=1536 与代理实际输出对齐，否则新命名集合按 1024 派生、与真实向量空间不一致（pitfall 保留并记录）。
+
+**1. 命名（同款 dim+model 约定）**
+
+新增 `knowledge_collection_name(provider, model, dim) -> fashion_knowledge_{provider}_{model-tag}_{dim}`（rag/mod.rs:160）＋`knowledge_model_tag`（:140）：text-embedding-v1/v2/v3 → tev1/tev2/tev3，deepseek-embedding → dsembed，未知模型 ASCII sanitize。
+
+provider/model 取真实来源：新增 `EmbeddingService::identity()`（rag/embedding.rs:114），provider 按配置端点 host 数据驱动推导——host 含 dashscope/qianwen/maas → dashscope；含 deepseek → deepseek；其余（含 localhost 代理）→ generic；model 为实际发送的模型名。
+本环境目标集合名（生产 qwen 兼容端点）：**fashion_knowledge_dashscope_tev3_1536**。
+
+**2. RAG 写/检索路由迁移（rag/mod.rs）**
+
+RagRetriever 改为双 store（结构见 :203-222）：
+- `named_store`：writable，绑定 identity 派生的 dim+model 命名集合；
+- `legacy_store`：`new_read_only` 绑定 config.qdrant_collection（fashion_knowledge），仅检索 fallback。
+方法路由（方法签名全部不变）：
+- `new`（:225）：按 embedding identity 构造命名集合；
+- `ensure_collection`（:258）：named 集合带 metadata（vector_dim/model/provider/created_by/task）ensure；legacy 走 verify_collection_dim 只验证不创建（missing → debug 日志，不报错）；
+- `read_store`（:288）：过渡期 fail-safe——named points_count `Some(>0)` 用 named；missing(None)/0 回退 legacy；
+- 写入：`upsert_chunks`（:296）→ named；删除：`delete_document_vectors`（:317，及 delete_document_points）→ named；并注明：只存在于 legacy 的点不被删除路径覆盖，须先跑平移（与 style 链路一致，legacy 保持只读）；
+- 检索：`search`（:302）→ read_store；`retrieve`（:325，agent/engine.rs:186 调用）同样自动获得新集合优先语义。pgvector 职责未动。
+
+**3. 存量 7 点平移（复用 migrate.rs）**
+
+上一轮 images/migrate.rs 的 `migrate_points`（库逻辑不绑定 style 语义：source/target stores + target 名校验）直接复用，无需泛化。新增 CLI 示例 `api-core/examples/migrate_knowledge.rs`（仿 migrate_style_images）：
+- 源 store new_read_only（example:78 附近）；目标 writable 绑定命名集合；先 `ensure_collection(1536, metadata provider=dashscope/model=text-embedding-v3)` 建集合后复制（先建后验）；
+- 目标 protected 拦截（is_protected_legacy → exit 2）、source==target 拦截；migrate_points 内部再做 protected bail 与 store 绑定一致性 bail；
+- 同 id upsert 替换 → 幂等可恢复；结束按 scrolled==copied 且 target 点数 >= source 对账。
+
+**4. 白名单语义同步（仅注释）**
+
+`PROTECTED_LEGACY_COLLECTIONS`（qdrant.rs:38，值不变）文档更新：两个 legacy 名现在都是「过渡期只读 fallback ＋ 平移脚本源」，均永不为写目标；生成名不可能命中（knowledge 侧新增同名 never-protected 测试）。三写入口仍未加硬校验（B）。
+
+**5. 测试（全 hermetic：wiremock 进程内 mock；零真实 :6333）**
+
+rag/mod.rs 新增 10 个（:365 起）：
+- 命名 2：knowledge_collection_name 三种 provider/model + never-protected；
+- identity：host 三态（maas→dashscope、deepseek、localhost→generic）；
+- 构造：new 绑定名 = identity 派生名；
+- 过渡两态 3：named 非空优先（断言 GET+POST 均落 named、legacy 零接触）、missing 回退 legacy、empty(0) 回退 legacy；
+- 写路由 2：upsert PUT 落 named、delete POST 落 named；
+- ensure：missing 时只 PUT 创建 named 且 metadata 正确，legacy verify missing 被容忍。
+
+全量 `cargo test`：**lib 122 passed（上一轮 112 +10）、handlers_chat 6、handlers_mcp 2、handlers_skills 3，合计 133 passed 0 failed**。`cargo fmt --check` 干净。`cargo build --examples`（clip_smoke/reindex_clip/migrate_style_images/migrate_knowledge）通过。clippy 本机未安装，留 CI。
+
+**6. 真机冒烟证据（2026-10-06，非 cargo test）**
+
+① 平移脚本对真 :6333：
+- dashscope 命名集：`Created Qdrant collection collection=fashion_knowledge_dashscope_tev3_1536 vector_dim=1536`；`scrolled=7 copied=7`；target 0→7；源 fashion_knowledge 仍 7。
+- 独立对账：源/目标 id 集合相等（7=7）；按 id 逐点比较 payload 全等、vector 全等（1536 分量差值全 0；整行 diff 的唯一差异是点顺序）。
+- 幂等复跑：7→7，无 Created。
+- 另按本地代理部署名（generic provider）建第二个目标集 fashion_knowledge_generic_tev3_1536：7→7，源仍 7。
+② RAG 写+检索真实链路（CORE_PORT=8092；embedding 指向本地 OpenAI 兼容 mock：127.0.0.1:18401 返回常量 1536 向量；EMBEDDING_DIM=1536）：
+- 上传 smoke_doc.txt（唯一标记 UNIQUE-MARKER-KNOWLEDGE-SMOKE-7Q）→ 后台索引完成日志（indexed=1，doc ready）；generic 命名集 7→8，存量 fashion_knowledge 仍 7（写路由落新集合）。
+- POST /internal/knowledge/search（top_k=20）→ 结果包含 UNIQUE-MARKER 文本（grep 计数 1）：该 chunk 只存在于命名集合，由数据本身证明检索走新集合；存量仍 7。
+- 注：MINIMAX_API_KEY=boot-dummy 仅为通过启动 fail-fast（LLM health 与本轮无关）；embedding mock 为 scratch 临时组件、非仓库交付物；冒烟新增的 1 个 smoke 文档 DB 行与 1 个标记点保留在环境中（与上一轮 generic style 冒烟数据同样处理），故 generic 命名集当前 8 点。
+
+冒烟后全量对账：
+
+| 集合 | 点数 |
+|---|---|
+| fashion_knowledge（存量） | 7（全程未变） |
+| fashion_knowledge_dashscope_tev3_1536（新，生产命名） | 7 |
+| fashion_knowledge_generic_tev3_1536（新，含 1 冒烟标记点） | 8 |
+| style_images（存量） | 2 |
+| style_images_dashscope_mmembedv1_1024 | 2 |
+| style_images_generic_clipvitb32_512 | 1 |
+| style_images_local_clipvitb32_512 | 82 |
+
+**遗留 / 下一步**
+- **B 阶段仍未实施**：三写入口硬锁（qdrant.rs ensure_collection/upsert_raw_points/delete_by_document）对 style 与 RAG ingestion 同样生效、无豁免名单——待验收后另派。
+- 旧集合删除决策另定（本卡不删）；生产部署建议显式 EMBEDDING_DIM=1536 与代理实际输出对齐。
+
+---
+
 ### T-028: ComfyUI 服务部署 + 图片生成 Skill
 
 ```

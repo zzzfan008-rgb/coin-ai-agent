@@ -99,6 +99,37 @@ impl EmbeddingService {
     pub fn model_name(&self) -> &str {
         &self.model
     }
+
+    /// `(provider, model)` identity for collection metadata and the
+    /// dim+model collection name.
+    ///
+    /// Provider is derived from the CONFIGURED endpoint host rather than
+    /// hardcoded, so it follows where embeddings actually go:
+    ///   - hosts containing dashscope / qianwen / maas → `dashscope`
+    ///     (Aliyun text-embedding models, including the qwen-compatible
+    ///     proxy this project defaults to);
+    ///   - host containing deepseek → `deepseek`;
+    ///   - anything else (localhost proxies included) → `generic`.
+    /// Model is the effective model name sent on every request.
+    pub fn identity(&self) -> (&'static str, &str) {
+        let host = self
+            .endpoint
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .split(['/', ':'])
+            .next()
+            .unwrap_or("")
+            .to_lowercase();
+        let provider =
+            if host.contains("dashscope") || host.contains("qianwen") || host.contains("maas") {
+                "dashscope"
+            } else if host.contains("deepseek") {
+                "deepseek"
+            } else {
+                "generic"
+            };
+        (provider, &self.model)
+    }
 }
 
 // ── Response types ─────────────────────────────────────────────────────────────

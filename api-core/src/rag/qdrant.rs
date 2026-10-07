@@ -16,21 +16,20 @@ use serde_json::Value;
 
 use super::{QdrantChunk, QdrantSearchResult};
 
-/// Legacy collections from the DashScope era that T-027 tooling must
-/// protect:
-///   - `style_images` (1024-dim points): after increment 3 all four CLIP
-///     provider modes write to their own dim+model-named collection. The
-///     legacy name survives ONLY as a read-only fallback target while a
-///     mode's new collection is still missing or empty (transitional
-///     search semantics) and as the source of the one-off migration
-///     script — it is never a write target.
-///   - `fashion_knowledge`: the document-RAG main chain (collection name
-///     comes from the knowledge config). Exempted from migration: it is a
-///     separate text-RAG pipeline, not the style-image chain.
+/// Legacy collections from the DashScope/DeepSeek era that T-027 tooling
+/// must protect — increment 3 addendum: BOTH style and knowledge chains
+/// now write dim+model-named collections:
+///   - `style_images` (1024): read-only transitional fallback for the
+///     style chain + source of the style migration;
+///   - `fashion_knowledge` (1536 on this machine): read-only
+///     transitional fallback for the document-RAG chain + source of the
+///     knowledge migration.
+/// Neither name is ever a write target — each may be a migration SOURCE
+/// or a read-only fallback only.
 ///
-/// Dim+model-named collections structurally can never match one of these
-/// names — `style_collection_name` output is pinned by
-/// `generated_collection_names_are_never_protected_legacy`.
+/// Dim+model-named collections structurally can never match one of
+/// these names — `style_collection_name`/`knowledge_collection_name`
+/// output is pinned by never-protected tests.
 ///
 /// Scope note (T-027 B phase, NOT implemented yet): this list currently
 /// guards pipelines (entry assertions) and read-only routes; the three
