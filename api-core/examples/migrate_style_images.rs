@@ -31,6 +31,9 @@ const LEGACY_SOURCE: &str = "style_images";
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load .env the same way the service does (config.rs AppConfig::load),
+    // so TARGET derivation reads the exact same CLIP_* the service binds.
+    let _ = dotenvy::dotenv();
     // ── Derive the target from the live CLIP configuration ─────────────────
     // Mirrors ImageSearchService::from_env(): config → mode/provider/model,
     // dim resolution, route_specs → first writable route.
@@ -89,6 +92,9 @@ async fn main() -> Result<()> {
             "target '{target}' is a PROTECTED LEGACY collection name — writes into legacy \
              collections are forbidden. Pass a generated name or fix the CLIP config."
         );
+    }
+    if source == target {
+        anyhow::bail!("refusing to migrate: source and target are the same collection '{source}'");
     }
 
     // ── Ensure target exists (upsert is idempotent) ───────────────────────

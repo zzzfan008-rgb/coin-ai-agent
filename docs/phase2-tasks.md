@@ -619,7 +619,7 @@ rag/mod.rs 新增 10 个（:365 起）：
 
 **遗留 / 下一步**
 - **B 阶段仍未实施**：三写入口硬锁（qdrant.rs ensure_collection/upsert_raw_points/delete_by_document）对 style 与 RAG ingestion 同样生效、无豁免名单——待验收后另派。
-- 旧集合删除决策另定（本卡不删）；生产部署建议显式 EMBEDDING_DIM=1536 与代理实际输出对齐。
+- 旧集合删除决策另定（本卡不删）；生产部署建议显式 EMBEDDING_DIM=1536（与 text-embedding-3-small 原生输出维度一致）。
 - **2026-10-07 更新**：上述「生产 qwen 兼容端点」归因已被 orchestrator 取证推翻（见第 0 节重写）；本节 dashscope_tev3_1536/generic_tev3_1536 的平移与冒烟记录保留为历史，两个集合均为**误名孤儿集合，勿使用**。改道实施见下节 P1-A 记录。
 
 ---
@@ -692,6 +692,17 @@ vector dims: {1536}
 - **B 阶段仍未实施**：三写入口硬锁待验收后另派。
 - 三个旧 fashion_knowledge* 集合（存量 + 两个孤儿）删除决策另定，本卡不删。
 - 无未提交 commit（orchestrator 收口）。
+
+#### T-027 增量 3 · 复审修复轮（2026-10-07，PASS-WITH-NOTES 后 4 点小轮）
+
+复审报告：/Users/lionfan/.hermes/cache/scratch/t027_recheck_report.md（PASS-WITH-NOTES）。范围严格限 4 点，未碰 qdrant.rs / route_specs / search_similar / B 阶段 / Qdrant / DB。
+
+1. **P2-1 恢复 source==target 拦截（修法 a，reviewer 推荐）**：migrate_knowledge.rs:87-89 与 migrate_style_images.rs:96-98 在 protected bail 之后各恢复 3 行守卫 `if source == target { anyhow::bail!(...) }`。实证：`cargo run --example migrate_knowledge -- fashion_probe fashion_probe` → `Error: refusing to migrate: source and target are the same collection 'fashion_probe'`，bail 发生在任何 Qdrant 调用之前（零网络零写入）。docs 增量 3 记录（"两 example 均保留…source==target 拦截"）随守卫恢复自动重新属实。
+2. **P2-2 两 example 加 .env 加载**：migrate_knowledge.rs:38-40 与 migrate_style_images.rs:34-36 各加 `let _ = dotenvy::dotenv();`（config.rs:64 同款，dotenvy 已是依赖）。实证：未 source .env 直跑 example 打印 `effective EMBEDDING_BASE_URL=https://api.apiyi.com/v1`（migrate_knowledge.rs:70-74 新增行），说明 dotenvy 已加载 api-core/.env，推导与服务读到同一配置。
+3. **P3-1 final_doc_state 调用点接线测试覆盖（修法 a）**：indexer.rs 抽纯函数 `DocumentIndexer::apply_upsert_result(indexed, batch_len, upsert_result, upsert_errors)`（:179-199）——upsert 失败时 error 入列 + indexed 按 batch_len 回退，batch 循环（:110-117）改为经该函数接线。hermetic 测试 2 个钉住接线（:303-332）：`upsert_failure_wiring_rolls_back_indexed_and_records_error`（5-3=2 回退、error 入列、与 final_doc_state 组合后 failed 永不 ready）与 `upsert_success_wiring_keeps_indexed_untouched`。未采用 b。
+4. **P3-2 docs:622 历史行改事实措辞**：`生产部署建议显式 EMBEDDING_DIM=1536（与 text-embedding-3-small 原生输出维度一致）`，删除「与代理实际输出对齐」因果措辞。
+
+验证：cargo check --examples --tests OK；cargo fmt --check 干净；cargo test → **140 passed 0 failed（lib 129 = 上轮 127 + 接线 2；chat 6；mcp 2；skills 3）**。守卫/ dotenvy 均真机实证（见上）。
 
 ---
 

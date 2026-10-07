@@ -107,13 +107,19 @@ impl DocumentIndexer {
 
             if (batch_full || last_chunk) && !batch.is_empty() {
                 let batch_len = batch.len();
-                if let Err(e) = retriever.upsert_chunks(std::mem::take(&mut batch)).await {
-                    tracing::error!(doc_id, "Qdrant batch upsert failed: {e}");
-                    upsert_errors.push(format!("Qdrant batch upsert failed: {e:#}"));
-                    // The points in this batch were NOT persisted — do not
-                    // count them as indexed (P2-1).
-                    indexed = indexed.saturating_sub(batch_len);
-                }
+                let upsert_result = retriever
+                    .upsert_chunks(std::mem::take(&mut batch))
+                    .await
+                    .map_err(|e| {
+                        tracing::error!(doc_id, "Qdrant batch upsert failed: {e}");
+                        format!("Qdrant batch upsert failed: {e:#}")
+                    });
+                indexed = Self::apply_upsert_result(
+                    indexed,
+                    batch_len,
+                    upsert_result,
+                    &mut upsert_errors,
+                );
             }
         }
 
@@ -173,6 +179,30 @@ impl DocumentIndexer {
     }
 
     // ── Status decision ─────────────────────────────────────────────────────
+
+    /// P2-1 wiring invariant (hermetically tested): apply one batch-upsert
+    /// outcome to the run totals. On failure the error message is pushed to
+    /// `upsert_errors` AND the batch length is rolled back from `indexed`
+    /// (those points were never persisted), so `final_doc_state` can never
+    /// report `ready` for a run that lost points. On success `indexed` is
+    /// returned untouched. Pure function — no I/O — so the wiring itself is
+    /// covered without touching Qdrant.
+    fn apply_upsert_result(
+        indexed: usize,
+        batch_len: usize,
+        upsert_result: Result<(), String>,
+        upsert_errors: &mut Vec<String>,
+    ) -> usize {
+        match upsert_result {
+            Ok(()) => indexed,
+            Err(e) => {
+                upsert_errors.push(e);
+                // The points in this batch were NOT persisted — do not
+                // count them as indexed (P2-1).
+                indexed.saturating_sub(batch_len)
+            }
+        }
+    }
 
     /// Final `(status, error_message)` decision for an indexing run.
     ///
@@ -272,6 +302,34 @@ mod tests {
     }
 
     // ── P2-1: upsert failure must never mark the document ready ────────────
+
+    #[test]
+    fn upsert_failure_wiring_rolls_back_indexed_and_records_error() {
+        // P3-1 wiring invariant: the batch loop feeds apply_upsert_result;
+        // a failed batch MUST roll `indexed` back by the batch length AND
+        // record the error, so final_doc_state sees the loss.
+        let mut upsert_errors = Vec::new();
+        let indexed = DocumentIndexer::apply_upsert_result(
+            5,
+            3,
+            Err("Qdrant batch upsert failed: connection refused".into()),
+            &mut upsert_errors,
+        );
+        assert_eq!(indexed, 2, "failed batch points must not stay indexed");
+        assert_eq!(upsert_errors.len(), 1);
+        // Composition with final_doc_state: the run is failed, never ready.
+        let (status, msg) = DocumentIndexer::final_doc_state(indexed, 5, &upsert_errors);
+        assert_eq!(status, "failed");
+        assert!(msg.unwrap().contains("upsert failed"));
+    }
+
+    #[test]
+    fn upsert_success_wiring_keeps_indexed_untouched() {
+        let mut upsert_errors = Vec::new();
+        let indexed = DocumentIndexer::apply_upsert_result(5, 3, Ok(()), &mut upsert_errors);
+        assert_eq!(indexed, 5);
+        assert!(upsert_errors.is_empty());
+    }
 
     #[test]
     fn upsert_failure_marks_failed_never_ready() {

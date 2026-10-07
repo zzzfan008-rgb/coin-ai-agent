@@ -35,6 +35,9 @@ const LEGACY_SOURCE: &str = "fashion_knowledge";
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load .env the same way the service does (config.rs AppConfig::load),
+    // so TARGET derivation reads the exact same EMBEDDING_* the service binds.
+    let _ = dotenvy::dotenv();
     // ── Derive the default target from the live embedding configuration ────
     // Mirrors RagRetriever::new: RagConfig::default() reads EMBEDDING_* env,
     // provider falls out of the endpoint host (apiyi/generic → "generic").
@@ -64,6 +67,11 @@ async fn main() -> Result<()> {
     } else {
         println!("migrate_knowledge: target={target} (derived from config)");
     }
+    // Operator eyeball check: which base URL is actually effective right now.
+    println!(
+        "migrate_knowledge: effective EMBEDDING_BASE_URL={}",
+        rag_cfg.embedding_base_url
+    );
     // The derived target must equal the target the service would bind.
     if target == derived_target {
         println!("migrate_knowledge: target matches service derivation ({derived_target})");
@@ -80,6 +88,9 @@ async fn main() -> Result<()> {
             "target '{target}' is a PROTECTED LEGACY collection name — writes into legacy \
              collections are forbidden. Pass a generated name or fix the embedding config."
         );
+    }
+    if source == target {
+        anyhow::bail!("refusing to migrate: source and target are the same collection '{source}'");
     }
 
     // ── Ensure target exists (upsert is idempotent) ───────────────────────
