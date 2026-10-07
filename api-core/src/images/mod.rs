@@ -259,6 +259,21 @@ impl ImageSearchService {
         self.clip.model_name()
     }
 
+    /// `(provider, model)` identity of the effective CLIP client —
+    /// observability source for the P3-1 startup binding log.
+    pub fn collection_identity(&self) -> (&'static str, &str) {
+        self.clip.collection_identity()
+    }
+
+    /// First writable route `(dim, collection)` — the collection every
+    /// write actually targets in the current mode.
+    pub fn write_route(&self) -> Option<(usize, &str)> {
+        self.routes
+            .iter()
+            .find(|r| r.writable)
+            .map(|r| (r.dim, r.collection.as_str()))
+    }
+
     /// Active mode wire name (health surface).
     pub fn mode_str(&self) -> &'static str {
         self.clip.mode().as_str()

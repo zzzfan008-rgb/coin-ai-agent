@@ -70,6 +70,10 @@ impl DocumentIndexer {
         // ── 3. Embed + upsert in batches ────────────────────────────────────
         let mut indexed: usize = 0;
         let mut batch: Vec<QdrantChunk> = Vec::new();
+        // P2-1: every failed Qdrant batch upsert is recorded — the final
+        // status decision must never mark the document ready when points
+        // were lost.
+        let mut upsert_errors: Vec<String> = Vec::new();
 
         for (i, chunk_text) in chunks.iter().enumerate() {
             match retriever.embed_text(chunk_text).await {
@@ -102,35 +106,32 @@ impl DocumentIndexer {
             let last_chunk = i == total_chunks - 1;
 
             if (batch_full || last_chunk) && !batch.is_empty() {
+                let batch_len = batch.len();
                 if let Err(e) = retriever.upsert_chunks(std::mem::take(&mut batch)).await {
                     tracing::error!(doc_id, "Qdrant batch upsert failed: {e}");
+                    upsert_errors.push(format!("Qdrant batch upsert failed: {e:#}"));
+                    // The points in this batch were NOT persisted — do not
+                    // count them as indexed (P2-1).
+                    indexed = indexed.saturating_sub(batch_len);
                 }
             }
         }
 
         // ── 4. Final status ─────────────────────────────────────────────────
-        let status = if indexed == 0 {
-            "failed"
-        } else if indexed < total_chunks {
-            "ready" // partial — some chunks failed but doc is usable
-        } else {
-            "ready"
-        };
+        // P2-1: a failed upsert batch must never leave the document ready.
+        let (status, error_message) = Self::final_doc_state(indexed, total_chunks, &upsert_errors);
 
         sqlx::query(
             r#"UPDATE knowledge_documents
                SET status = $1,
                    chunk_count = $2,
                    processed_at = NOW(),
-                   error_message = CASE WHEN $3 < $4
-                       THEN 'Some chunks failed to embed'
-                       ELSE NULL END
-               WHERE id = $5"#,
+                   error_message = $3
+               WHERE id = $4"#,
         )
         .bind(status)
         .bind(indexed as i32)
-        .bind(indexed as i32)
-        .bind(total_chunks as i32)
+        .bind(error_message)
         .bind(doc_uuid)
         .execute(pool)
         .await?;
@@ -169,6 +170,34 @@ impl DocumentIndexer {
         .execute(pool)
         .await?;
         Ok(())
+    }
+
+    // ── Status decision ─────────────────────────────────────────────────────
+
+    /// Final `(status, error_message)` decision for an indexing run.
+    ///
+    /// P2-1 invariant: a failed Qdrant batch upsert must NEVER produce
+    /// `ready` — the points of that batch were not persisted, so the
+    /// document must be `failed` with the upsert error recorded.
+    /// `ready` with a message is reserved for embed-only partial
+    /// failures (some chunks failed to embed but everything that could
+    /// be embedded was persisted).
+    fn final_doc_state(
+        indexed: usize,
+        total_chunks: usize,
+        upsert_errors: &[String],
+    ) -> (&'static str, Option<String>) {
+        if !upsert_errors.is_empty() {
+            return ("failed", Some(upsert_errors.join("; ")));
+        }
+        if indexed == 0 {
+            return ("failed", Some("Some chunks failed to embed".into()));
+        }
+        if indexed < total_chunks {
+            // partial — some chunks failed to embed but doc is usable
+            return ("ready", Some("Some chunks failed to embed".into()));
+        }
+        ("ready", None)
     }
 
     // ── Chunking ─────────────────────────────────────────────────────────────
@@ -240,5 +269,42 @@ mod tests {
         assert!(chunks.len() > 1);
         // First chunk should be 400 chars
         assert_eq!(chunks[0].len(), 400);
+    }
+
+    // ── P2-1: upsert failure must never mark the document ready ────────────
+
+    #[test]
+    fn upsert_failure_marks_failed_never_ready() {
+        let errs = vec!["Qdrant batch upsert failed: connection refused".to_string()];
+        // Even when every chunk embedded fine, a lost upsert batch forces
+        // `failed` and records the error.
+        let (status, msg) = DocumentIndexer::final_doc_state(3, 3, &errs);
+        assert_eq!(status, "failed");
+        assert!(msg.unwrap().contains("upsert failed"));
+        // Partial embed success + one lost batch still fails.
+        let (status, _) = DocumentIndexer::final_doc_state(4, 5, &errs);
+        assert_eq!(status, "failed");
+    }
+
+    #[test]
+    fn all_embedded_and_persisted_is_ready_without_message() {
+        let (status, msg) = DocumentIndexer::final_doc_state(2, 2, &[]);
+        assert_eq!(status, "ready");
+        assert!(msg.is_none());
+    }
+
+    #[test]
+    fn embed_only_partial_failure_is_ready_with_message() {
+        // Legacy semantics kept: embed failures alone leave the doc usable.
+        let (status, msg) = DocumentIndexer::final_doc_state(2, 3, &[]);
+        assert_eq!(status, "ready");
+        assert_eq!(msg.as_deref(), Some("Some chunks failed to embed"));
+    }
+
+    #[test]
+    fn zero_chunks_indexed_is_failed() {
+        let (status, msg) = DocumentIndexer::final_doc_state(0, 3, &[]);
+        assert_eq!(status, "failed");
+        assert!(msg.is_some());
     }
 }

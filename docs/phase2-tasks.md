@@ -540,22 +540,23 @@ HIGH/CRITICAL 不豁免；风险通过「签名不变 + 新增 17 个 hermetic �
 
 用户拍板：**fashion_knowledge 豁免否决，一并迁移**（卡条 4 已据此改写）。本节为追加轮记录，上一轮「豁免，不迁」结论作废、保留为历史。范围仅 RAG 链路；style 链路已迁代码未动。**B 阶段仍未实施。**
 
-**0. 事实核实：1536 向量的真实来源（结论如实记录）**
+**0. 事实核实：1536 向量的真实来源（2026-10-07 orchestrator 独立取证后重写；旧归因作废）**
 
-- 存量集合 fashion_knowledge：7 点，向量逐点实测 1536 维（带向量 scroll 计数 1535 逗号）；集合 config params size=1536，无 collection metadata。
-- 现存 7 点的写入时点：点 payload 的 4 个 doc_id 与 DB knowledge_documents 中 **2026-10-02 16:14 批次**完全对应（f041afce fabric 1、80e60320 tech 2、f371fb2e washing 2、d74654ac color 2，共 7 chunks；09-23 批次 7 chunks 已不在集合中）。
-- 当时代码（HEAD d2d4263，ce291dc 恢复提交在 16:59 才落地）RagConfig 实际生效值：model=text-embedding-v3、base=https://maas.qianwenaiapi.com/compatible-mode/v1、embedding_dim=1024（EMBEDDING_DIM 未设，.env 无任何 EMBEDDING_* 键，shell history 亦无覆盖痕迹）；EmbeddingService 请求体因此带 model=text-embedding-v3 与 dimensions=1024（rag/embedding.rs:55-61）。
-- **结论**：实际落库 1536 而请求 dimensions=1024 → 该 qwen 兼容代理（maas.qianwenaiapi.com）未按请求维度返回、实际输出 1536 向量（代理侧行为；无法完全排除摄入时 shell env 注入，但无任何证据支持）。
-- 配置默认值演进：30545cb（2026-09-21 23:17 接入 DashScope）之前代码硬编码 model=deepseek-embedding、dim 1536、base=https://api.deepseek.com/v1——集合本体（1536）应源于该时期；30545cb 之后默认 dim 1024，与现存集合形成 drift（启动 ensure 持续报 drift，即上一轮记录的现象）。
-- 当前 .env 生效面：EMBEDDING_API_KEY/EMBEDDING_DIM 均未设置；from_app_config 的 key 回退链（EMBEDDING_API_KEY→DASHSCOPE_API_KEY→config.qwen_api_key）在当前 .env 下为空——即按当前 .env 新摄入不可用；10-02 的摄入依赖当时 shell 注入的 key。
-- 配置建议（不做代码强制）：生产应显式设 EMBEDDING_DIM=1536 与代理实际输出对齐，否则新命名集合按 1024 派生、与真实向量空间不一致（pitfall 保留并记录）。
+- 存量集合 fashion_knowledge：7 点，向量逐点实测 1536 维；集合 config params size=1536，无 collection metadata。
+- 现存 7 点的写入时点：点 payload 的 4 个 doc_id 与 DB knowledge_documents 中 **2026-10-02 16:14 批次**逐一对上（f371fb2e=washing-care、f041afce=fabric、d74654ac=color-palette、80e60320=tech-pack，共 7 chunks）；09-23 14:53 首批的 7 点已被该重灌覆盖，不在集合中。
+- **配置证据**：api-core/.env 于同日 **16:09** 被切到 EMBEDDING_BASE_URL=https://api.apiyi.com/v1、EMBEDDING_MODEL=text-embedding-3-small、EMBEDDING_DIM=1536（文件 mtime 佐证，16:09 早于 16:14 摄入）。
+- **结论（定案）**：现存 7 点最可能是 **text-embedding-3-small（原生 1536）** 向量，apiyi 端点产出。
+- **旧归因作废（本节重写原因）**：2026-10-06 追加轮曾写「摄入时 RagConfig=qwen+text-embedding-v3+1024、qwen 兼容代理忽略 dimensions 强制输出 1536」——那是 09-23 首批的可能情况，但首批已被 10-02 重灌覆盖，归因对象不存在；同轮「无法排除摄入时 shell env 注入」的猜测无证据支持，一并撤下。
+- pgvector 侧：knowledge_documents.chunk_embedding 列虽是 vector(1024)，实查 **0 行有值**——pgvector 路径从未真正嵌入过，1024 只是建表默认，不构成任何归因证据。
+- 配置默认值演进（历史保留）：30545cb（2026-09-21 接入 DashScope）之前代码硬编码 model=deepseek-embedding、dim 1536、base=api.deepseek.com；30545cb 之后默认 dim 1024，与现存集合形成 drift（启动 ensure 报 drift 的历史现象）。
+- 当前 .env 生效面：EMBEDDING_BASE_URL/MODEL/DIM 已设为 apiyi/text-embedding-3-small/1536（本节取证时实查）。
 
 **1. 命名（同款 dim+model 约定）**
 
 新增 `knowledge_collection_name(provider, model, dim) -> fashion_knowledge_{provider}_{model-tag}_{dim}`（rag/mod.rs:160）＋`knowledge_model_tag`（:140）：text-embedding-v1/v2/v3 → tev1/tev2/tev3，deepseek-embedding → dsembed，未知模型 ASCII sanitize。
 
-provider/model 取真实来源：新增 `EmbeddingService::identity()`（rag/embedding.rs:114），provider 按配置端点 host 数据驱动推导——host 含 dashscope/qianwen/maas → dashscope；含 deepseek → deepseek；其余（含 localhost 代理）→ generic；model 为实际发送的模型名。
-本环境目标集合名（生产 qwen 兼容端点）：**fashion_knowledge_dashscope_tev3_1536**。
+provider/model 取真实来源：新增 `EmbeddingService::identity()`（rag/embedding.rs:114），provider 按配置端点 host 数据驱动推导——host 含 dashscope/qianwen/maas → dashscope；含 deepseek → deepseek；其余（含 localhost 代理、apiyi）→ generic；model 为实际发送的模型名。
+本环境目标集合名：**fashion_knowledge_generic_textembedding3small_1536**（2026-10-07 P1-A 改道轮定案，apiyi=text-embedding-3-small 权威；下节 P1-A 记录含推导中间值证据）。首轮（2026-10-06）曾按当时误判的 qwen 归因产出 `fashion_knowledge_dashscope_tev3_1536` 与 `fashion_knowledge_generic_tev3_1536`——**均为误名孤儿集合，勿使用**，不删不写（删除决策另定）。
 
 **2. RAG 写/检索路由迁移（rag/mod.rs）**
 
@@ -619,6 +620,78 @@ rag/mod.rs 新增 10 个（:365 起）：
 **遗留 / 下一步**
 - **B 阶段仍未实施**：三写入口硬锁（qdrant.rs ensure_collection/upsert_raw_points/delete_by_document）对 style 与 RAG ingestion 同样生效、无豁免名单——待验收后另派。
 - 旧集合删除决策另定（本卡不删）；生产部署建议显式 EMBEDDING_DIM=1536 与代理实际输出对齐。
+- **2026-10-07 更新**：上述「生产 qwen 兼容端点」归因已被 orchestrator 取证推翻（见第 0 节重写）；本节 dashscope_tev3_1536/generic_tev3_1536 的平移与冒烟记录保留为历史，两个集合均为**误名孤儿集合，勿使用**。改道实施见下节 P1-A 记录。
+
+---
+
+#### T-027 增量 3 · P1-A 改道轮：fashion_knowledge → generic_textembedding3small_1536（2026-10-07）
+
+用户拍板：**apiyi 是现行 embedding 权威**；目标集合名 = `fashion_knowledge_generic_textembedding3small_1536`。范围纪律：不动 style 链路已迁代码、不动 QdrantStore 写入口（B 未放行）、不删任何集合、不 commit 不 push。真机验证用当前 .env 实际配置，不注入覆盖任何 EMBEDDING_* 变量。
+
+**1. 推导中间值证据（真机，api-core/.env 源入后 `cargo run --example migrate_knowledge` 无参）**
+
+```
+migrate_knowledge: embedding endpoint=https://api.apiyi.com/v1 provider=generic model=text-embedding-3-small dim=1536
+migrate_knowledge: source=fashion_knowledge
+migrate_knowledge: target=fashion_knowledge_generic_textembedding3small_1536 (derived from config)
+migrate_knowledge: target matches service derivation (fashion_knowledge_generic_textembedding3small_1536)
+```
+推导链逐字：host=api.apiyi.com → identity() generic 分支 → provider=generic；model=text-embedding-3-small → knowledge_model_tag → textembedding3small；dim=1536；knowledge_collection_name 拼出目标名，与用户指定逐字一致。该链路同时被 hermetic 测试钉住（rag/mod.rs `binding_reports_production_identity_from_config`：注入 apiyi/text-embedding-3-small/1536 → binding() 四元组全断言）。
+
+**2. 平移与幂等（READ-COPY：scroll+upsert、点 ID 不变（Uuid v5 of doc_id:i）、payload 原样、不调 embedding API、存量 fashion_knowledge 零写入）**
+
+- 第一遍：`scrolled=7 copied=7 batches=1`；target 0→7；source 仍 7。
+- 第二遍复跑：`scrolled=7 copied=7 batches=1`——无变化，幂等确认。
+
+**3. 对账（带向量+payload scroll 逐点严格比对）**
+
+```
+legacy count: 7  new count: 7
+id sets equal: True
+points byte-identical (id+payload+vector): True | differing: 0
+vector dims: {1536}
+  00b8ee75… / 0134b5ca… -> doc_id=f371fb2e (washing-care)
+  283b4db9…            -> doc_id=f041afce (fabric)
+  42566db4…            -> doc_id=d74654ac (color-palette)
+  58fcaa97… / b61c9572… -> doc_id=80e60320 (tech-pack)
+  d2a3311a…            -> doc_id=d74654ac (color-palette)
+```
+存量 fashion_knowledge = 1536/7 全程零写入；新集合 = 1536/7 逐点 ID+payload+vector 与存量全等；doc_id 与第 0 节 10-02 16:14 批次逐一对上。
+
+**4. 真服务冒烟（CORE_PORT=8092，当前 .env，无任何 EMBEDDING_* 注入）**
+
+- P3-1 启动日志：`INFO api_core: RAG embedding binding resolved provider=generic model=text-embedding-3-small dim=1536 collection=fashion_knowledge_generic_textembedding3small_1536`
+- POST /internal/knowledge/search（query=洗涤护理 cotton 晾晒，org/dept=00000000-…-0001）→ 命中「服装洗护保养指南…纯棉（Cotton）」。
+- 路由证据（LOG_LEVEL=debug 复启服务）：`DEBUG api_core::rag: knowledge search route: named collection collection=fashion_knowledge_generic_textembedding3small_1536 count=7`——检索明确走新集合，未落存量。RAG fail-safe 两态语义未动（新集合非空→用新，缺/空→只读回退存量）。
+
+**5. P2/P3 修复（与改道同轮）**
+
+- **P2-1（rag/indexer.rs）**：upsert 批失败不再被吞——错误记入 upsert_errors + tracing::error，失败批 indexed 回退；文档最终状态经纯函数 `DocumentIndexer::final_doc_state(indexed, total_chunks, &upsert_errors)`：有 upsert 错误 → ("failed", 错误拼接)；indexed==0 → ("failed", "Some chunks failed to embed")；indexed<total_chunks（embed 部分失败但全部持久化）→ ("ready", 部分 embed 失败消息)；全成 → ("ready", None)。UPDATE bind(status, indexed, error_message)。hermetic 测试 3 个钉住三态（upsert 错败永不 ready / 全成 ready 无消息 / 部分 embed 失败 ready 带消息 / 全失败 failed）。
+- **P2-2（examples 参数化）**：migrate_knowledge.rs 重写（`cargo run --example migrate_knowledge -- <SOURCE> [<TARGET>]`，TARGET 缺省=EMBEDDING_* 推导，显式 TARGET 与推导不一致时打 WARNING）；migrate_style_images.rs 同款重写（TARGET 缺省=CLIP_* 经 from_env/route_specs 推导首个 writable route）。两 example 均保留 READ-COPY 幂等语义、protected bail、source==target 拦截。**P3-2（examples panic!/位置参数）按拍板接受不改。**
+- **P3-1（启动日志）**：lib.rs RagRetriever 构造后 `RAG embedding binding resolved provider=… model=… dim=… collection=…`（info）；CLIP 侧对称日志（configured → `CLIP embedding binding resolved provider=… model=… dim=… collection=…`；无 writable route → warn）。RagRetriever 新增 `binding() -> (provider, model, dim, named_collection)` 供日志/测试复用；read_store() 两分支补 tracing::debug（named collection 命中 / legacy fallback）。
+- **.env.example（仓库根）**：Embedding 模板行改为 apiyi 身份（EMBEDDING_BASE_URL=https://api.apiyi.com/v1、EMBEDDING_MODEL=text-embedding-3-small、EMBEDDING_DIM=1536、集合名注释 fashion_knowledge_generic_textembedding3small_1536）；qwen maas（text-embedding-v3）转为注释备选；无任何真实 key。
+- 测试钉住：rag/mod.rs `knowledge_collection_names` 断言目标名逐字；identity cases 增 ("https://api.apiyi.com/v1","generic") 与生产链路断言；never-protected 测试增 (generic,text-embedding-3-small,1536) case；`binding_reports_production_identity_from_config` 注入生产身份断言四元组。
+
+**6. 验证汇总**
+
+- `cargo check --examples --tests` OK；`cargo fmt --check` 干净。
+- `cargo test`：**lib 127（上轮 122 + P2-1 3 个 + binding 1 个）、handlers_chat 6、handlers_mcp 2、handlers_skills 3，合计 138 passed 0 failed**（hermetic，零真实 :6333/:8399）。
+- 真机：平移两遍幂等（见 §2）、对账全等（见 §3）、冒烟走新集合（见 §4）。
+
+**7. 环境现状（冒烟后）**
+
+| 集合 | 点数 | 备注 |
+|---|---|---|
+| fashion_knowledge（存量） | 7 | 全程零写入，只读 fallback |
+| fashion_knowledge_generic_textembedding3small_1536 | 7 | **现行目标**，1536 |
+| fashion_knowledge_dashscope_tev3_1536 | 7 | 误名孤儿，勿使用（不删不写） |
+| fashion_knowledge_generic_tev3_1536 | 8 | 含 1 冒烟标记点，误名孤儿，勿使用 |
+| style_images* 四集合 | 2/2/1/82 | 未动（本轮回退不动 style 链路） |
+
+**遗留 / 下一步**
+- **B 阶段仍未实施**：三写入口硬锁待验收后另派。
+- 三个旧 fashion_knowledge* 集合（存量 + 两个孤儿）删除决策另定，本卡不删。
+- 无未提交 commit（orchestrator 收口）。
 
 ---
 

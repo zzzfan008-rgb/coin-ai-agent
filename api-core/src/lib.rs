@@ -296,6 +296,19 @@ pub async fn run() -> Result<()> {
     let rag_config = RagConfig::from_app_config(&config);
     let rag_retriever = Arc::new(RagRetriever::new(rag_config));
 
+    // P3-1: log the resolved embedding binding so the collection actually
+    // written to by indexing is visible at startup.
+    {
+        let (provider, model, dim, collection) = rag_retriever.binding();
+        tracing::info!(
+            provider = %provider,
+            model = %model,
+            dim,
+            collection = %collection,
+            "RAG embedding binding resolved"
+        );
+    }
+
     // Ensure the Qdrant collection exists; log but don't block startup.
     if let Err(e) = rag_retriever.ensure_collection().await {
         tracing::warn!("Qdrant collection init failed: {e} — indexing will retry");
@@ -344,7 +357,24 @@ pub async fn run() -> Result<()> {
     // ── CLIP image search (T-019) ───────────────────────────────────────────
     let image_search = Arc::new(ImageSearchService::from_env());
     if image_search.configured() {
-        tracing::info!("CLIP client ready (model={})", image_search.model_name());
+        // P3-1: log the resolved style binding (provider/model → writable
+        // collection) so the write target is visible at startup.
+        let (clip_provider, clip_model) = image_search.collection_identity();
+        if let Some((dim, collection)) = image_search.write_route() {
+            tracing::info!(
+                provider = %clip_provider,
+                model = %clip_model,
+                dim,
+                collection = %collection,
+                "CLIP embedding binding resolved"
+            );
+        } else {
+            tracing::warn!(
+                provider = %clip_provider,
+                model = %clip_model,
+                "CLIP client ready but no writable route resolved"
+            );
+        }
     } else {
         tracing::warn!(
             "CLIP_API_ENDPOINT not set — image upload/search will fail until configured"

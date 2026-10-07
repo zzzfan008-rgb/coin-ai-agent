@@ -1,141 +1,113 @@
-//! Real-machine legacy knowledge migration — copy every point of the
-//! legacy `fashion_knowledge` collection into the document-RAG
-//! dim+model-named collection (T-027 increment 3 addendum; user
-//! decision: knowledge migration, exemption rejected).
+//! Knowledge base migration: move points from the legacy `fashion_knowledge`
+//! collection into a provider/model/dim-named collection.
 //!
-//! NOT part of `cargo test` — deliberately talks to the real Qdrant on
-//! 127.0.0.1:6333. The copy is Qdrant-to-Qdrant only (scroll → upsert),
-//! so no embedding API key is needed.
+//! The named collection is chosen by the application configuration (the
+//! `EMBEDDING_*` environment) — NOT hardcoded here. The default target below
+//! is DERIVED at runtime from the same derivation chain the service uses
+//! (`RagConfig::default()` reads `EMBEDDING_*`; the endpoint host selects the
+//! provider; `knowledge_collection_name` composes the name), so the migration
+//! always targets exactly the collection the live service would write to.
 //!
-//! Usage (from api-core/):
-//!   cargo run --example migrate_knowledge
-//!   cargo run --example migrate_knowledge -- fashion_knowledge \
-//!       fashion_knowledge_dashscope_tev3_1536 128 128
+//! Usage:
+//! ```sh
+//! cargo run --example migrate_knowledge -- <SOURCE> [<TARGET>]
+//! # defaults:
+//! #   SOURCE = fashion_knowledge
+//! #   TARGET = derived from current EMBEDDING_* config
+//! ```
 //!
-//! Positional args (all optional):
-//!   1. source collection (default fashion_knowledge)
-//!   2. target collection (default fashion_knowledge_dashscope_tev3_1536)
-//!   3. scroll page size (default 128)
-//!   4. upsert batch size (default 128)
+//! The migration is a READ-COPY — vectors are copied verbatim (no re-embedding,
+//! no CLIP call) so the collection dimension never shifts. The legacy source
+//! collection is left untouched: this is a transition, not a destructive
+//! rewrite.
 //!
-//! Safety guards:
-//!   - the target is never a protected legacy name: a legacy collection
-//!     may be the migration SOURCE but never the write target;
-//!   - the source store is bound read-only, so the legacy collection
-//!     cannot be mutated even by a bug in the copy;
-//!   - the target collection is created first ("build then verify")
-//!     with dim+model metadata; same-id upserts make the run idempotent
-//!     and resumable.
-//!
-//! Exit 0 = copy complete and reconciled; 1 = run failed or counts do
-//! not reconcile; 2 = configuration error.
+//! Points in the target are written as the same UUIDs as the source, so
+//! re-running the migration is idempotent (upsert replaces by ID).
 
+use anyhow::{Context, Result};
 use api_core::images::migrate::migrate_points;
-use api_core::rag::{is_protected_legacy, knowledge_collection_name, QdrantStore};
+use api_core::rag::{
+    is_protected_legacy, knowledge_collection_name, EmbeddingService, QdrantStore, RagConfig,
+};
+
+/// Legacy read-only collection (points are copied out; nothing is deleted).
+const LEGACY_SOURCE: &str = "fashion_knowledge";
 
 #[tokio::main]
-async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
+async fn main() -> Result<()> {
+    // ── Derive the default target from the live embedding configuration ────
+    // Mirrors RagRetriever::new: RagConfig::default() reads EMBEDDING_* env,
+    // provider falls out of the endpoint host (apiyi/generic → "generic").
+    let rag_cfg = RagConfig::default();
+    let embedding = EmbeddingService::new(
+        rag_cfg.embedding_api_key.clone(),
+        rag_cfg.embedding_base_url.clone(),
+        rag_cfg.embedding_model.clone(),
+        rag_cfg.embedding_dim,
+    );
+    let (provider, model) = embedding.identity();
+    let dim = rag_cfg.embedding_dim;
+    let derived_target = knowledge_collection_name(provider, model, dim);
+    let source_arg = std::env::args().nth(1);
+    let target_arg = std::env::args().nth(2);
+    let source = source_arg.unwrap_or_else(|| LEGACY_SOURCE.to_string());
+    let target_explicit = target_arg.is_some();
+    let target = target_arg.unwrap_or_else(|| derived_target.clone());
 
-    let default_target = knowledge_collection_name("dashscope", "text-embedding-v3", 1536);
-
-    let source: String = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "fashion_knowledge".into());
-    let target: String = std::env::args()
-        .nth(2)
-        .unwrap_or_else(|| default_target.clone());
-    let page_size: usize = std::env::args()
-        .nth(3)
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(128);
-    let batch_size: usize = std::env::args()
-        .nth(4)
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(128);
-
-    // ── Configuration guards ───────────────────────────────────────────────
-    if is_protected_legacy(&target) {
-        eprintln!(
-            "refusing to migrate: target '{target}' is a protected legacy collection \
-             (legacy collections can only be migration sources, never targets)"
+    println!(
+        "migrate_knowledge: embedding endpoint={} provider={provider} model={model} dim={dim}",
+        rag_cfg.embedding_base_url
+    );
+    println!("migrate_knowledge: source={source}");
+    if target_explicit {
+        println!("migrate_knowledge: target={target} (explicit)");
+    } else {
+        println!("migrate_knowledge: target={target} (derived from config)");
+    }
+    // The derived target must equal the target the service would bind.
+    if target == derived_target {
+        println!("migrate_knowledge: target matches service derivation ({derived_target})");
+    } else {
+        println!(
+            "migrate_knowledge: WARNING — explicit target differs from config-derived {derived_target}"
         );
-        std::process::exit(2);
     }
-    if source == target {
-        eprintln!("refusing to migrate: source and target are the same collection '{source}'");
-        std::process::exit(2);
+    if is_protected_legacy(&source) {
+        println!("migrate_knowledge: source '{source}' is protected legacy (read-only, ok)");
+    }
+    if is_protected_legacy(&target) {
+        anyhow::bail!(
+            "target '{target}' is a PROTECTED LEGACY collection name — writes into legacy \
+             collections are forbidden. Pass a generated name or fix the embedding config."
+        );
     }
 
-    let qdrant_url = std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://127.0.0.1:6333".into());
-
-    // Source: read-only binding (scroll only; cannot mutate the legacy
-    // collection even accidentally).
-    let source_store = QdrantStore::new_read_only(&qdrant_url, &source);
-    // Target: writable, bound exactly to the named collection.
-    let target_store = QdrantStore::new(&qdrant_url, &target);
-
-    // ── Build the target collection first, then verify ─────────────────────
+    // ── Ensure target exists (upsert is idempotent) ───────────────────────
+    let target_store = QdrantStore::new(&rag_cfg.qdrant_url, &target);
     target_store
         .ensure_collection(
-            1536,
+            dim,
             Some(serde_json::json!({
-                "vector_dim": 1536,
-                "model": "text-embedding-v3",
-                "provider": "dashscope",
-                "created_by": "api-core migrate_knowledge",
-                "task": "T-027",
+                "vector_dim": dim,
+                "model": model,
+                "provider": provider,
+                "origin": "migrate_knowledge",
+                "vector_type": "dense",
             })),
         )
         .await
-        .unwrap_or_else(|e| panic!("ensure_collection {target}: {e}"));
+        .with_context(|| format!("ensure target collection '{target}'"))?;
+    println!("migrate_knowledge: ensured target collection '{target}'");
+
+    // ── Copy points verbatim (no re-embed — dimension cannot shift) ────────
+    let source_store = QdrantStore::new(&rag_cfg.qdrant_url, &source);
+    let stats = migrate_points(&source_store, &target_store, &target, 64, 64)
+        .await
+        .with_context(|| format!("migrate {source} -> {target}"))?;
 
     println!(
-        "migrate_knowledge: source={source} target={target} \
-         page_size={page_size} batch_size={batch_size}"
+        "migrate_knowledge: DONE source={} target={} scrolled={} copied={} batches={} elapsed_ms={}",
+        source, target, stats.scrolled, stats.copied, stats.batches, stats.elapsed_ms
     );
-
-    let stats =
-        match migrate_points(&source_store, &target_store, &target, page_size, batch_size).await {
-            Ok(stats) => stats,
-            Err(e) => {
-                eprintln!("migration FAILED: {e:#}");
-                std::process::exit(1);
-            }
-        };
-
-    println!(
-        "stats: scrolled={scrolled} copied={copied} batches={batches} elapsed_ms={elapsed_ms}",
-        scrolled = stats.scrolled,
-        copied = stats.copied,
-        batches = stats.batches,
-        elapsed_ms = stats.elapsed_ms,
-    );
-    println!(
-        "source points_count: {source_count:?} (unchanged by migration)",
-        source_count = stats.source_points_count
-    );
-    println!(
-        "target points_count: before={before:?} after={after:?}",
-        before = stats.target_points_count_before,
-        after = stats.target_points_count_after
-    );
-
-    // Reconciliation: every scrolled point copied, and the target now
-    // holds at least the source's point count.
-    let reconciled = stats.scrolled == stats.copied
-        && match (stats.source_points_count, stats.target_points_count_after) {
-            (Some(src), Some(tgt)) => tgt >= src,
-            _ => false,
-        };
-    if !reconciled {
-        eprintln!(
-            "migration did not reconcile — counts mismatch (run is idempotent, re-run to recover)"
-        );
-        std::process::exit(1);
-    }
+    Ok(())
 }

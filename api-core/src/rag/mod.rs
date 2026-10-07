@@ -287,8 +287,24 @@ impl RagRetriever {
     /// named; missing (None) or empty → read-only legacy store.
     async fn read_store(&self) -> Result<&QdrantStore> {
         match self.named_store.points_count().await? {
-            Some(count) if count > 0 => Ok(&self.named_store),
-            _ => Ok(&self.legacy_store),
+            Some(count) if count > 0 => {
+                // Observability: make the transitional route visible in
+                // logs so a search can be tied to the collection served.
+                tracing::debug!(
+                    collection = %self.named_collection,
+                    count,
+                    "knowledge search route: named collection"
+                );
+                Ok(&self.named_store)
+            }
+            other => {
+                tracing::debug!(
+                    collection = %self.config.qdrant_collection,
+                    named_points = ?other,
+                    "knowledge search route: legacy fallback (named missing/empty)"
+                );
+                Ok(&self.legacy_store)
+            }
         }
     }
 
@@ -357,6 +373,20 @@ impl RagRetriever {
         &self.named_collection
     }
 
+    /// Effective embedding binding — `(provider, model, dim, named
+    /// collection)` derived from the actual endpoint/model/dim config.
+    /// Logged at startup (P3-1) so the collection actually targeted is
+    /// visible without inspecting code.
+    pub fn binding(&self) -> (String, String, usize, String) {
+        let (provider, model) = self.embedding.identity();
+        (
+            provider.to_string(),
+            model.to_string(),
+            self.config.embedding_dim,
+            self.named_collection.clone(),
+        )
+    }
+
     /// Delete all Qdrant points belonging to a document.
     pub async fn delete_document_points(&self, doc_id: &str) -> Result<()> {
         self.named_store.delete_by_document(doc_id).await
@@ -391,6 +421,11 @@ mod tests {
             knowledge_collection_name("generic", "Future-Model/2", 256),
             "fashion_knowledge_generic_futuremodel2_256"
         );
+        // Current production identity (apiyi / OpenAI text-embedding-3-small).
+        assert_eq!(
+            knowledge_collection_name("generic", "text-embedding-3-small", 1536),
+            "fashion_knowledge_generic_textembedding3small_1536"
+        );
     }
 
     #[test]
@@ -399,6 +434,8 @@ mod tests {
             ("dashscope", "text-embedding-v3", 1536),
             ("deepseek", "deepseek-embedding", 1536),
             ("generic", "", 0),
+            // Production identity — must never be misread as legacy.
+            ("generic", "text-embedding-3-small", 1536),
         ] {
             let name = knowledge_collection_name(provider, model, dim);
             assert!(
@@ -419,6 +456,8 @@ mod tests {
             ),
             ("https://api.deepseek.com/v1", "deepseek"),
             ("http://127.0.0.1:18401", "generic"),
+            // Current production authority: apiyi (OpenAI-compatible).
+            ("https://api.apiyi.com/v1", "generic"),
         ];
         for (base, provider) in cases {
             let svc = EmbeddingService::new("key", base, "text-embedding-v3", 1536);
@@ -426,6 +465,18 @@ mod tests {
             assert_eq!(got_provider, provider, "{base}");
             assert_eq!(model, "text-embedding-v3");
         }
+        // Production model resolves to the production collection name.
+        let svc = EmbeddingService::new(
+            "key",
+            "https://api.apiyi.com/v1",
+            "text-embedding-3-small",
+            1536,
+        );
+        let (provider, model) = svc.identity();
+        assert_eq!(
+            knowledge_collection_name(provider, model, 1536),
+            "fashion_knowledge_generic_textembedding3small_1536"
+        );
     }
 
     // ── RagRetriever construction ──────────────────────────────────────────
@@ -443,6 +494,26 @@ mod tests {
     fn new_binds_named_collection_from_embedding_identity() {
         let retriever = RagRetriever::new(config_for("http://127.0.0.1:16333"));
         assert_eq!(retriever.named_collection(), NAMED_COLLECTION);
+    }
+
+    #[test]
+    fn binding_reports_production_identity_from_config() {
+        // P3-1: startup log source — binding must derive the same
+        // collection name the migration targets, from config only.
+        let mut config = RagConfig::default();
+        config.qdrant_url = "http://127.0.0.1:16333".into();
+        config.embedding_base_url = "https://api.apiyi.com/v1".into();
+        config.embedding_model = "text-embedding-3-small".into();
+        config.embedding_dim = 1536;
+        let retriever = RagRetriever::new(config);
+        let (provider, model, dim, collection) = retriever.binding();
+        assert_eq!(provider, "generic");
+        assert_eq!(model, "text-embedding-3-small");
+        assert_eq!(dim, 1536);
+        assert_eq!(
+            collection,
+            "fashion_knowledge_generic_textembedding3small_1536"
+        );
     }
 
     fn collection_info(count: u64) -> ResponseTemplate {
