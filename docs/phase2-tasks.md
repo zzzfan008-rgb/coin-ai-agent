@@ -710,13 +710,13 @@ vector dims: {1536}
 
 **1. 实现**
 
-- 新增 `QdrantStore::assert_not_protected_legacy()`（api-core/src/rag/qdrant.rs:125-138）：绑定集合名命中 `PROTECTED_LEGACY_COLLECTIONS`（fashion_knowledge / style_images）时 bail，文案 `"write refused: Qdrant collection '{name}' is a PROTECTED LEGACY collection (read-only fallback / migration source) — writes are forbidden"`，与 read-only 文案（"bound read-only"）可区分。
+- 新增 `QdrantStore::assert_not_protected_legacy()`（api-core/src/rag/qdrant.rs:133；注释块 :125 起）：绑定集合名命中 `PROTECTED_LEGACY_COLLECTIONS`（fashion_knowledge / style_images）时 bail，文案 `"write refused: Qdrant collection '{name}' is a PROTECTED LEGACY collection (read-only fallback / migration source) — writes are forbidden"`，与 read-only 文案（"bound read-only"）可区分。
 - 5 个变异入口在**任何 HTTP 请求之前**调用它，且 **fail-closed 顺序 = protected 检查排在空批次早退之前**（空批次写 protected 也响亮报错，静默 Ok 即门禁失效）：
-  1. `ensure_collection` qdrant.rs:163（在 GET 之前——missing 时 PUT 会重建禁用目标）
-  2. `upsert_chunks` qdrant.rs:349
-  3. `upsert_raw_points` qdrant.rs:388
-  4. `upsert_scrolled_points` qdrant.rs:305
-  5. `delete_by_document` qdrant.rs:492
+  1. `ensure_collection` qdrant.rs:166（在 GET 之前——missing 时 PUT 会重建禁用目标）
+  2. `upsert_chunks` qdrant.rs:350
+  3. `upsert_raw_points` qdrant.rs:397
+  4. `upsert_scrolled_points` qdrant.rs:306
+  5. `delete_by_document` qdrant.rs:501
 - 读入口保持可用（迁移源 + 过渡回退依赖）：`scroll_points` / `search` / `points_count` / `verify_collection_dim` 未加锁。无豁免名单、无 feature flag、无环境变量开关。
 - scope note 更新（qdrant.rs:34-42）：删「NOT implemented yet」，改为已实施并列出 5 个入口 + 读入口保持开放的说明。
 
@@ -727,12 +727,12 @@ vector dims: {1536}
 - `protected_legacy_read_paths_stay_open`：protected 集合上 scroll/search/points_count/verify_collection_dim 对 mock 均成功。
 - `non_protected_empty_batch_is_silent_ok`：非 protected 空批次静默 Ok 行为不变。
 - 既有测试调整（唯一非 qdrant.rs 改动）：images/mod.rs `ensure_collection_metadata_provider_follows_dashscope_mode`（F2）原直连 `style_images` 路由，B 阶段硬锁下改为 `style_images_dashscope_mmembedv1_1024`（F2 的 provider/model/dim metadata 语义不变，测试意图保留）。
-- 现有 `creates_collection_with_metadata_when_missing` 等非 protected 测试全部继续绿；examples 侧 refuses_protected_legacy_target 测试继续绿。
+- 现有 `creates_collection_with_metadata_when_missing` 等非 protected 测试全部继续绿；examples 侧 refuses_protected_legacy_target 测试继续绿。reviewer 复核：F2 测试原手工 specs 把 legacy `style_images` 标 writable，与生产 route_specs 矛盾（生产一直以 false 推送为只读回退），属测试自身缺陷被对齐，非掩盖缺陷。
 
 **3. 验证**
 
 - cargo check --examples --tests OK；cargo fmt --check 干净。
-- cargo test：**144 passed 0 failed（lib 133 = 129 + B 阶段 4；chat 6；mcp 2；skills 3）**。
+- cargo test：**144 passed 0 failed（lib 133 = 129 + B 阶段 4；chat 6；mcp 2；skills 3）**。reviewer 独立重跑 `cargo test --lib` = 133 passed 0 failed，与本记录一致；semgrep p/rust 扫 qdrant.rs + images/mod.rs = 0 findings。
 
 **4. 真机冒烟（2026-10-08，当前 .env，无任何 EMBEDDING_* 注入）**
 
@@ -740,6 +740,8 @@ vector dims: {1536}
 - CLIP 侧 generic 模式无可写路由（warn 路径，未触发 bail）；health 探针 `clip.mode=generic`。
 - POST /internal/knowledge/search（洗涤护理 cotton 晾晒）→ 命中「服装洗护保养指南…纯棉（Cotton）」。
 - 结论：**存量两集合（fashion_knowledge / style_images）仍可读不可写**——读入口（scroll/search/points_count/verify_collection_dim）开放、5 个写入口在任何 HTTP 前硬拒。
+- orchestrator 真机复核：8 个集合点数与 B 阶段前基线逐一致（fashion_knowledge 1536/7、style_images 1024/2、fashion_knowledge_generic_textembedding3small_1536 1536/7、style 四集合 512/82・1024/2・512/1，两孤儿 fk 7/8），零写入。
+- reviewer 门禁：**PASS-WITH-NOTES**（P1/P2 × 0，P3 × 1 = 本节行号漂移，已按实测值回写）。
 
 ---
 
