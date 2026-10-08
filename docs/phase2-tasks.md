@@ -704,6 +704,43 @@ vector dims: {1536}
 
 验证：cargo check --examples --tests OK；cargo fmt --check 干净；cargo test → **140 passed 0 failed（lib 129 = 上轮 127 + 接线 2；chat 6；mcp 2；skills 3）**。守卫/ dotenvy 均真机实证（见上）。
 
+#### T-027 增量 3 · B 阶段：QdrantStore 写入口 is_protected_legacy 硬锁（2026-10-08）
+
+用户放行 B 阶段。前置（C + P1-A + 复审修复轮）收口于 b7a114f。**只改 qdrant.rs 生产代码 + 一处既有 images 测试对齐**；rag/mod.rs / images/mod.rs 生产代码未动；route_specs / search_similar 未动；Qdrant/DB 零写入。
+
+**1. 实现**
+
+- 新增 `QdrantStore::assert_not_protected_legacy()`（api-core/src/rag/qdrant.rs:125-138）：绑定集合名命中 `PROTECTED_LEGACY_COLLECTIONS`（fashion_knowledge / style_images）时 bail，文案 `"write refused: Qdrant collection '{name}' is a PROTECTED LEGACY collection (read-only fallback / migration source) — writes are forbidden"`，与 read-only 文案（"bound read-only"）可区分。
+- 5 个变异入口在**任何 HTTP 请求之前**调用它，且 **fail-closed 顺序 = protected 检查排在空批次早退之前**（空批次写 protected 也响亮报错，静默 Ok 即门禁失效）：
+  1. `ensure_collection` qdrant.rs:163（在 GET 之前——missing 时 PUT 会重建禁用目标）
+  2. `upsert_chunks` qdrant.rs:349
+  3. `upsert_raw_points` qdrant.rs:388
+  4. `upsert_scrolled_points` qdrant.rs:305
+  5. `delete_by_document` qdrant.rs:492
+- 读入口保持可用（迁移源 + 过渡回退依赖）：`scroll_points` / `search` / `points_count` / `verify_collection_dim` 未加锁。无豁免名单、无 feature flag、无环境变量开关。
+- scope note 更新（qdrant.rs:34-42）：删「NOT implemented yet」，改为已实施并列出 5 个入口 + 读入口保持开放的说明。
+
+**2. hermetic 测试（qdrant.rs:893-1109，wiremock，绝不触真 :6333）**
+
+- `protected_legacy_refuses_all_five_write_entries_before_http`：两个 protected 名 × 5 个变异入口各断言 bail 且 mock 端收到 0 个请求。
+- `protected_legacy_empty_batch_still_fails`：空批次 × 3 个 upsert 入口仍 bail（钉住 fail-closed 顺序）。
+- `protected_legacy_read_paths_stay_open`：protected 集合上 scroll/search/points_count/verify_collection_dim 对 mock 均成功。
+- `non_protected_empty_batch_is_silent_ok`：非 protected 空批次静默 Ok 行为不变。
+- 既有测试调整（唯一非 qdrant.rs 改动）：images/mod.rs `ensure_collection_metadata_provider_follows_dashscope_mode`（F2）原直连 `style_images` 路由，B 阶段硬锁下改为 `style_images_dashscope_mmembedv1_1024`（F2 的 provider/model/dim metadata 语义不变，测试意图保留）。
+- 现有 `creates_collection_with_metadata_when_missing` 等非 protected 测试全部继续绿；examples 侧 refuses_protected_legacy_target 测试继续绿。
+
+**3. 验证**
+
+- cargo check --examples --tests OK；cargo fmt --check 干净。
+- cargo test：**144 passed 0 failed（lib 133 = 129 + B 阶段 4；chat 6；mcp 2；skills 3）**。
+
+**4. 真机冒烟（2026-10-08，当前 .env，无任何 EMBEDDING_* 注入）**
+
+- 启动日志：`INFO api_core: RAG embedding binding resolved provider=generic model=text-embedding-3-small dim=1536 collection=fashion_knowledge_generic_textembedding3small_1536`——走 dim+model 命名集合，ensure_collection 无 protected bail（日志零 "PROTECTED LEGACY"、零 ERROR）。
+- CLIP 侧 generic 模式无可写路由（warn 路径，未触发 bail）；health 探针 `clip.mode=generic`。
+- POST /internal/knowledge/search（洗涤护理 cotton 晾晒）→ 命中「服装洗护保养指南…纯棉（Cotton）」。
+- 结论：**存量两集合（fashion_knowledge / style_images）仍可读不可写**——读入口（scroll/search/points_count/verify_collection_dim）开放、5 个写入口在任何 HTTP 前硬拒。
+
 ---
 
 ### T-028: ComfyUI 服务部署 + 图片生成 Skill

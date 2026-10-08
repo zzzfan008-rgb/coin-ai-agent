@@ -652,14 +652,18 @@ mod tests {
         // F2: in DashScope mode a fresh-env creation (GET 404 → PUT) must
         // stamp the collection metadata with the actually-effective
         // provider, never the hardcoded "local".
+        // B phase: the writable target must be a dim+model-named
+        // collection — legacy `style_images` is a protected name and the
+        // QdrantStore write entries now refuse it before any HTTP request.
+        const COLLECTION: &str = "style_images_dashscope_mmembedv1_1024";
         let qdrant = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/collections/style_images"))
+            .and(path(format!("/collections/{COLLECTION}")))
             .respond_with(ResponseTemplate::new(404))
             .mount(&qdrant)
             .await;
         Mock::given(method("PUT"))
-            .and(path("/collections/style_images"))
+            .and(path(format!("/collections/{COLLECTION}")))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "result": true, "status": "ok",
             })))
@@ -674,11 +678,8 @@ mod tests {
             local_base_url: String::new(),
             local_timeout: Duration::from_secs(5),
         });
-        let service = ImageSearchService::new(
-            clip,
-            &qdrant.uri(),
-            vec![(1024, "style_images".into(), true)],
-        );
+        let service =
+            ImageSearchService::new(clip, &qdrant.uri(), vec![(1024, COLLECTION.into(), true)]);
         service
             .ensure_collection()
             .await

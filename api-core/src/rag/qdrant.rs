@@ -31,9 +31,14 @@ use super::{QdrantChunk, QdrantSearchResult};
 /// these names — `style_collection_name`/`knowledge_collection_name`
 /// output is pinned by never-protected tests.
 ///
-/// Scope note (T-027 B phase, NOT implemented yet): this list currently
-/// guards pipelines (entry assertions) and read-only routes; the three
-/// `QdrantStore` write entries do not hard-check it yet.
+/// Scope note (T-027 B phase, implemented): this list guards pipelines
+/// (entry assertions), read-only routes, AND every `QdrantStore` write
+/// entry — the five mutating methods hard-check it before ANY HTTP
+/// request: `ensure_collection`, `upsert_chunks`, `upsert_raw_points`,
+/// `upsert_scrolled_points`, `delete_by_document`. Read methods
+/// (`scroll_points`, `search`, `points_count`, `verify_collection_dim`)
+/// intentionally stay open on protected collections — migrations read
+/// their source from them and the transitional fallback searches them.
 pub const PROTECTED_LEGACY_COLLECTIONS: &[&str] = &["fashion_knowledge", "style_images"];
 
 /// Whether `collection` names a protected legacy collection.
@@ -117,6 +122,25 @@ impl QdrantStore {
         Ok(())
     }
 
+    /// Fail before ANY HTTP request when the bound collection is a
+    /// protected legacy name (`fashion_knowledge` / `style_images`).
+    /// These names are read-only transitional fallbacks and migration
+    /// SOURCES — never write targets. Distinct from `assert_writable`:
+    /// a `new()`-bound (writable) store pointing at a protected name
+    /// still must not write. Fail-closed: called before empty-batch
+    /// early returns, so even an empty write attempt is a loud error
+    /// (a silent Ok would be a broken gate).
+    fn assert_not_protected_legacy(&self) -> Result<()> {
+        if is_protected_legacy(&self.collection) {
+            bail!(
+                "write refused: Qdrant collection '{}' is a PROTECTED LEGACY collection \
+                 (read-only fallback / migration source) — writes are forbidden",
+                self.collection
+            );
+        }
+        Ok(())
+    }
+
     // ── Collection management ────────────────────────────────────────────────
 
     /// Create the collection if it does not already exist.
@@ -136,6 +160,10 @@ impl QdrantStore {
         vector_dim: usize,
         metadata: Option<Value>,
     ) -> Result<()> {
+        // B phase: protected legacy names must not even be probed — a
+        // missing-collection PUT would recreate a forbidden target.
+        // Fail before the GET.
+        self.assert_not_protected_legacy()?;
         let info_url = format!("{}/collections/{}", self.base_url, self.collection);
 
         let resp = self.http.get(&info_url).send().await?;
@@ -274,6 +302,8 @@ impl QdrantStore {
     /// Upsert points with original (JSON) ids — the migration copy path.
     /// Same id replacement makes the copy idempotent.
     pub async fn upsert_scrolled_points(&self, points: Vec<ScrolledPoint>) -> Result<()> {
+        // Fail-closed: protected check before the empty-batch early return.
+        self.assert_not_protected_legacy()?;
         if points.is_empty() {
             return Ok(());
         }
@@ -316,6 +346,8 @@ impl QdrantStore {
 
     /// Upsert (insert-or-replace) a batch of chunks.
     pub async fn upsert_chunks(&self, chunks: Vec<QdrantChunk>) -> Result<()> {
+        // Fail-closed: protected check before the empty-batch early return.
+        self.assert_not_protected_legacy()?;
         if chunks.is_empty() {
             return Ok(());
         }
@@ -361,6 +393,8 @@ impl QdrantStore {
 
     /// Upsert points with arbitrary JSON payloads (used by the image indexer).
     pub async fn upsert_raw_points(&self, points: Vec<RawPoint>) -> Result<()> {
+        // Fail-closed: protected check before the empty-batch early return.
+        self.assert_not_protected_legacy()?;
         if points.is_empty() {
             return Ok(());
         }
@@ -463,6 +497,8 @@ impl QdrantStore {
 
     /// Delete all points belonging to a document (used on re-index or soft-delete).
     pub async fn delete_by_document(&self, doc_id: &str) -> Result<()> {
+        // Fail-closed: protected check before any HTTP request.
+        self.assert_not_protected_legacy()?;
         self.assert_writable()?;
 
         let url = format!(
@@ -575,6 +611,7 @@ fn parse_scrolled_point(point: Value) -> Result<ScrolledPoint> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::QdrantPayload;
     use super::*;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -849,5 +886,231 @@ mod tests {
             .expect_err("read-only target refuses");
         assert!(format!("{err:#}").contains("bound read-only"), "{err:#}");
         assert_eq!(ro_server.received_requests().await.unwrap().len(), 0);
+    }
+
+    // ── B phase: protected legacy write hard-lock ─────────────────────────
+
+    fn sample_chunk() -> QdrantChunk {
+        QdrantChunk {
+            id: "00000000-0000-0000-0000-000000000001".into(),
+            vector: vec![0.1; 4],
+            payload: QdrantPayload {
+                text: "t".into(),
+                doc_id: "d".into(),
+                dept_id: "x".into(),
+                org_id: "o".into(),
+                title: "t".into(),
+                chunk_index: 0,
+            },
+        }
+    }
+
+    fn sample_raw_point() -> RawPoint {
+        RawPoint {
+            id: "1".into(),
+            vector: vec![0.1; 4],
+            payload: serde_json::json!({}),
+        }
+    }
+
+    fn sample_scrolled_point() -> ScrolledPoint {
+        ScrolledPoint {
+            id: serde_json::json!("uuid-1"),
+            vector: vec![0.1; 4],
+            payload: serde_json::json!({}),
+        }
+    }
+
+    /// Every protected name must be refused by every mutating entry,
+    /// before ANY HTTP request (server receives nothing at all).
+    #[tokio::test]
+    async fn protected_legacy_refuses_all_five_write_entries_before_http() {
+        for name in PROTECTED_LEGACY_COLLECTIONS {
+            // 1. ensure_collection
+            let server = MockServer::start().await;
+            let store = QdrantStore::new(&server.uri(), name);
+            let err = store
+                .ensure_collection(4, None)
+                .await
+                .expect_err("protected ensure must fail");
+            assert!(
+                format!("{err:#}").contains("PROTECTED LEGACY"),
+                "{name}: {err:#}"
+            );
+            assert_eq!(server.received_requests().await.unwrap().len(), 0, "{name}");
+
+            // 2. upsert_chunks
+            let server = MockServer::start().await;
+            let store = QdrantStore::new(&server.uri(), name);
+            let err = store
+                .upsert_chunks(vec![sample_chunk()])
+                .await
+                .expect_err("protected upsert_chunks must fail");
+            assert!(
+                format!("{err:#}").contains("PROTECTED LEGACY"),
+                "{name}: {err:#}"
+            );
+            assert_eq!(server.received_requests().await.unwrap().len(), 0, "{name}");
+
+            // 3. upsert_raw_points
+            let server = MockServer::start().await;
+            let store = QdrantStore::new(&server.uri(), name);
+            let err = store
+                .upsert_raw_points(vec![sample_raw_point()])
+                .await
+                .expect_err("protected upsert_raw_points must fail");
+            assert!(
+                format!("{err:#}").contains("PROTECTED LEGACY"),
+                "{name}: {err:#}"
+            );
+            assert_eq!(server.received_requests().await.unwrap().len(), 0, "{name}");
+
+            // 4. upsert_scrolled_points
+            let server = MockServer::start().await;
+            let store = QdrantStore::new(&server.uri(), name);
+            let err = store
+                .upsert_scrolled_points(vec![sample_scrolled_point()])
+                .await
+                .expect_err("protected upsert_scrolled_points must fail");
+            assert!(
+                format!("{err:#}").contains("PROTECTED LEGACY"),
+                "{name}: {err:#}"
+            );
+            assert_eq!(server.received_requests().await.unwrap().len(), 0, "{name}");
+
+            // 5. delete_by_document
+            let server = MockServer::start().await;
+            let store = QdrantStore::new(&server.uri(), name);
+            let err = store
+                .delete_by_document("doc-1")
+                .await
+                .expect_err("protected delete must fail");
+            assert!(
+                format!("{err:#}").contains("PROTECTED LEGACY"),
+                "{name}: {err:#}"
+            );
+            assert_eq!(server.received_requests().await.unwrap().len(), 0, "{name}");
+        }
+    }
+
+    /// Fail-closed ordering: an EMPTY batch to a protected collection must
+    /// still be a loud error — the protected check runs before the
+    /// empty-batch early return, otherwise a silent Ok would void the gate.
+    #[tokio::test]
+    async fn protected_legacy_empty_batch_still_fails() {
+        for name in PROTECTED_LEGACY_COLLECTIONS {
+            let server = MockServer::start().await;
+            let store = QdrantStore::new(&server.uri(), name);
+            let err = store
+                .upsert_chunks(Vec::new())
+                .await
+                .expect_err("empty upsert_chunks on protected must fail");
+            assert!(
+                format!("{err:#}").contains("PROTECTED LEGACY"),
+                "{name}: {err:#}"
+            );
+
+            let err = store
+                .upsert_raw_points(Vec::new())
+                .await
+                .expect_err("empty upsert_raw_points on protected must fail");
+            assert!(
+                format!("{err:#}").contains("PROTECTED LEGACY"),
+                "{name}: {err:#}"
+            );
+
+            let err = store
+                .upsert_scrolled_points(Vec::new())
+                .await
+                .expect_err("empty upsert_scrolled_points on protected must fail");
+            assert!(
+                format!("{err:#}").contains("PROTECTED LEGACY"),
+                "{name}: {err:#}"
+            );
+        }
+    }
+
+    /// Read paths stay open on protected collections: migrations read their
+    /// source from them and the transitional fallback searches them.
+    #[tokio::test]
+    async fn protected_legacy_read_paths_stay_open() {
+        let name = "fashion_knowledge";
+
+        // scroll_points
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(format!("/collections/{name}/points/scroll")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {"points": [{
+                    "id": "p1", "vector": [0.1, 0.2], "payload": null,
+                }], "next_page_offset": null},
+            })))
+            .mount(&server)
+            .await;
+        let store = QdrantStore::new(&server.uri(), name);
+        let page = store
+            .scroll_points(None, 10)
+            .await
+            .expect("scroll readable");
+        assert_eq!(page.points.len(), 1);
+
+        // search
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(format!("/collections/{name}/points/search")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": [],
+            })))
+            .mount(&server)
+            .await;
+        let store = QdrantStore::new(&server.uri(), name);
+        let hits = store
+            .search(&[0.1; 4], "org", "dept", 5)
+            .await
+            .expect("search readable");
+        assert!(hits.is_empty());
+
+        // points_count
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/collections/{name}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {"points_count": 7},
+            })))
+            .mount(&server)
+            .await;
+        let store = QdrantStore::new(&server.uri(), name);
+        assert_eq!(store.points_count().await.unwrap(), Some(7));
+
+        // verify_collection_dim
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/collections/{name}")))
+            .respond_with(collection_info(4))
+            .mount(&server)
+            .await;
+        let store = QdrantStore::new_read_only(&server.uri(), name);
+        assert_eq!(
+            store
+                .verify_collection_dim(4)
+                .await
+                .expect("verify readable"),
+            true
+        );
+    }
+
+    /// Non-protected empty batches still short-circuit to Ok (behaviour
+    /// unchanged for writable names).
+    #[tokio::test]
+    async fn non_protected_empty_batch_is_silent_ok() {
+        let server = MockServer::start().await;
+        let store = QdrantStore::new(&server.uri(), "c1");
+        store.upsert_chunks(Vec::new()).await.expect("empty ok");
+        store.upsert_raw_points(Vec::new()).await.expect("empty ok");
+        store
+            .upsert_scrolled_points(Vec::new())
+            .await
+            .expect("empty ok");
+        assert_eq!(server.received_requests().await.unwrap().len(), 0);
     }
 }
